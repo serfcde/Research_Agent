@@ -52,3 +52,7 @@ research_outputs/
 
 # Docker
 docker-compose.override.yml
+
+
+frontend/.next/
+frontend/node_modules/
