@@ -50,6 +50,7 @@ research_outputs/
 !frontend/**/*.json
 !frontend/**/*.md
 !README.md  
+!requirements.txt
 
 # Docker
 docker-compose.override.yml
