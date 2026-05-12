@@ -28,7 +28,7 @@ class WebSearchClient:
         self.timeout = settings.tavily_search_timeout_seconds
         self.max_retries = settings.tavily_max_retries
         self.tavily_base_url = "https://api.tavily.com"
-        self.serpapi_base_url = "https://serpapi.com"
+        self.serpapi_base_url = "https://serpapi.com/search.json"
 
     @retry(
         stop=stop_after_attempt(2),
@@ -107,6 +107,7 @@ class WebSearchClient:
                     self.serpapi_base_url,
                     params=params,
                     timeout=self.timeout,
+                    follow_redirects=True,
                 )
                 response.raise_for_status()
                 result = response.json()

@@ -1,5 +1,6 @@
 """Application configuration management."""
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import os
@@ -11,13 +12,13 @@ class Settings(BaseSettings):
     # Application
     app_name: str = "Research Agent"
     app_version: str = "1.0.0"
-    debug: bool = True
+    debug: bool = Field(default=True, validation_alias="APP_DEBUG")
     log_level: str = "INFO"
 
     # OpenAI Configuration
     openai_api_key: str
-    openai_model: str = "gpt-4-turbo-preview"
-    openai_model_fallback: str = "gpt-4-turbo-preview"
+    openai_model: str = "gpt-4o-mini"
+    openai_model_fallback: str = "gpt-4o-mini"
     llm_timeout_seconds: int = 60
     llm_max_tokens: int = 4000
 

@@ -18,7 +18,7 @@ class WorkerAgent:
         """Initialize worker agent."""
         self.llm = get_llm_service()
         self.search_client = get_search_client()
-        self.max_concurrent = 5
+        self.max_concurrent = 2
         self.task_timeout = 30
 
     async def execute_task(self, task: ResearchTask) -> TaskResult:
@@ -55,21 +55,33 @@ class WorkerAgent:
                     error_message="No search results returned",
                 )
 
-            # Summarize findings
+            # Summarize findings. If the LLM is rate-limited, keep the retrieved
+            # search content and sources instead of losing the research result.
             logger.debug(f"Task {task.task_id}: Summarizing {len(content)} chars...")
-            findings = await self.llm.summarize_content(content, max_words=300)
+            try:
+                findings = await self.llm.summarize_content(content, max_words=300)
+                status = "completed"
+                error_message = None
+            except Exception as summarization_error:
+                logger.warning(
+                    f"Task {task.task_id}: Summarization failed, using source snippets: {str(summarization_error)}"
+                )
+                findings = self._fallback_findings(content, sources)
+                status = "partial"
+                error_message = f"Summarization failed: {str(summarization_error)}"
 
             execution_time = time.time() - start_time
-            logger.info(f"Task {task.task_id} completed in {execution_time:.1f}s")
+            logger.info(f"Task {task.task_id} completed in {execution_time:.1f}s with status={status}")
 
             return TaskResult(
                 task_id=task.task_id,
                 topic=task.topic,
                 subtopic=task.subtopic,
-                status="completed",
+                status=status,
                 findings=findings,
                 sources=sources,
                 execution_time_seconds=execution_time,
+                error_message=error_message,
             )
 
         except asyncio.TimeoutError:
@@ -97,6 +109,16 @@ class WorkerAgent:
                 execution_time_seconds=time.time() - start_time,
                 error_message=str(e),
             )
+
+    def _fallback_findings(self, content: str, sources: List[ResearchSource]) -> str:
+        """Create readable findings from search snippets when LLM summarization fails."""
+        snippets = []
+        for source in sources[:5]:
+            if source.snippet:
+                snippets.append(f"{source.title}: {source.snippet}")
+
+        fallback = " ".join(snippets) if snippets else content
+        return fallback[:1200] if fallback else "Search returned sources, but no snippet content was available."
 
     async def execute_tasks(self, tasks: List[ResearchTask]) -> List[TaskResult]:
         """

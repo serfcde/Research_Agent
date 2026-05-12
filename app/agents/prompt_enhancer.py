@@ -1,6 +1,7 @@
 """Prompt Clarifier Agent - Enhance and structure user prompts."""
 
 import json
+import re
 from app.services.llm_service import get_llm_service
 from app.models.schemas import EnhancedPrompt
 from app.utils.logger import get_logger
@@ -14,6 +15,50 @@ class PromptClarifierAgent:
     def __init__(self):
         """Initialize prompt clarifier agent."""
         self.llm = get_llm_service()
+
+    def _extract_topics_heuristically(self, user_prompt: str) -> list[str]:
+        """Extract obvious multi-topic prompts without relying entirely on the LLM."""
+        cleaned = re.sub(
+            r"^\s*(research|analyze|analyse|compare|study|investigate|explore)\s+",
+            "",
+            user_prompt.strip(),
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .?!")
+
+        comparison_match = re.search(r"(.+?)\s+(?:vs\.?|versus)\s+(.+)", cleaned, flags=re.IGNORECASE)
+        if comparison_match:
+            candidates = [comparison_match.group(1), comparison_match.group(2)]
+        else:
+            candidates = re.split(r"\s*,\s*|\s+\band\b\s+", cleaned, flags=re.IGNORECASE)
+
+        topics = []
+        for candidate in candidates:
+            topic = re.sub(r"^(about|on|the)\s+", "", candidate.strip(" .?!"), flags=re.IGNORECASE)
+            if len(topic) >= 3 and topic.lower() not in {"pros", "cons", "benefits", "challenges"}:
+                topics.append(topic)
+
+        return topics[:4] or [cleaned[:80]]
+
+    def _normalize_topics(self, topics: list[str], user_prompt: str) -> list[str]:
+        """Clean LLM topics and split missed obvious two-topic prompts."""
+        heuristic_topics = self._extract_topics_heuristically(user_prompt)
+        cleaned_topics = []
+
+        for topic in topics:
+            cleaned = re.sub(
+                r"^\s*(research|analyze|analyse|compare|study|investigate|explore)\s+",
+                "",
+                str(topic).strip(" .?!"),
+                flags=re.IGNORECASE,
+            )
+            if cleaned:
+                cleaned_topics.append(cleaned)
+
+        if len(cleaned_topics) <= 1 and len(heuristic_topics) > 1:
+            return heuristic_topics
+
+        return cleaned_topics or heuristic_topics
 
     async def enhance_prompt(self, user_prompt: str) -> EnhancedPrompt:
         """
@@ -64,15 +109,17 @@ Respond with ONLY a JSON object (no markdown, no explanation)."""
                 else:
                     raise ValueError("Could not parse LLM response as JSON")
 
+            topics = self._normalize_topics(parsed.get("topics", []), user_prompt)
+
             # Create EnhancedPrompt with defaults for missing fields
             enhanced = EnhancedPrompt(
-                topics=parsed.get("topics", [user_prompt.split()[0]]),
+                topics=topics,
                 research_depth=parsed.get("research_depth", "medium"),
                 required_sections=parsed.get(
                     "required_sections",
                     ["Overview", "Key Findings", "Challenges", "Future Trends"],
                 ),
-                compare_topics=parsed.get("compare_topics", len(parsed.get("topics", [])) > 1),
+                compare_topics=parsed.get("compare_topics", len(topics) > 1),
                 focus_areas=parsed.get("focus_areas", []),
             )
 
@@ -84,11 +131,12 @@ Respond with ONLY a JSON object (no markdown, no explanation)."""
         except Exception as e:
             logger.error(f"Error enhancing prompt: {str(e)}")
             # Return default enhanced prompt
+            topics = self._extract_topics_heuristically(user_prompt)
             return EnhancedPrompt(
-                topics=[user_prompt[:50]],
+                topics=topics,
                 research_depth="medium",
                 required_sections=["Overview", "Key Findings", "Challenges", "Future Trends"],
-                compare_topics=False,
+                compare_topics=len(topics) > 1,
                 focus_areas=[],
             )
 

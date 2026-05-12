@@ -1,6 +1,7 @@
 """Unit tests for agents."""
 
 import pytest
+from unittest.mock import patch
 from app.agents.prompt_enhancer import PromptClarifierAgent
 from app.agents.planner import PlannerAgent
 from app.agents.worker import WorkerAgent
@@ -10,6 +11,7 @@ from tests.fixtures import (
     mock_enhanced_prompt,
     mock_research_tasks,
     mock_task_results,
+    mock_research_report,
     mock_llm_service,
     mock_search_client,
 )
@@ -18,7 +20,7 @@ from tests.fixtures import (
 @pytest.mark.asyncio
 async def test_prompt_clarifier_enhance_prompt(mock_llm_service):
     """Test prompt clarification."""
-    with pytest.mock.patch(
+    with patch(
         "app.agents.prompt_enhancer.get_llm_service",
         return_value=mock_llm_service,
     ):
@@ -33,7 +35,7 @@ async def test_prompt_clarifier_enhance_prompt(mock_llm_service):
 @pytest.mark.asyncio
 async def test_planner_create_plan(mock_llm_service, mock_enhanced_prompt):
     """Test research plan creation."""
-    with pytest.mock.patch(
+    with patch(
         "app.agents.planner.get_llm_service",
         return_value=mock_llm_service,
     ):
@@ -48,10 +50,10 @@ async def test_planner_create_plan(mock_llm_service, mock_enhanced_prompt):
 @pytest.mark.asyncio
 async def test_worker_execute_task(mock_llm_service, mock_search_client):
     """Test single task execution."""
-    with pytest.mock.patch(
+    with patch(
         "app.agents.worker.get_llm_service",
         return_value=mock_llm_service,
-    ), pytest.mock.patch(
+    ), patch(
         "app.agents.worker.get_search_client",
         return_value=mock_search_client,
     ):
@@ -79,7 +81,7 @@ async def test_formatter_format_report(
     mock_enhanced_prompt,
 ):
     """Test report formatting."""
-    with pytest.mock.patch(
+    with patch(
         "app.agents.formatter.get_llm_service",
         return_value=mock_llm_service,
     ):

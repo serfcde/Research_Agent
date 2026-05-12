@@ -88,6 +88,8 @@ Generate specific research tasks with search queries. For each topic, create tas
                 )
                 tasks.append(task)
 
+            tasks = self._limit_tasks_by_depth(tasks, enhanced_prompt)
+
             logger.info(f"Created {len(tasks)} research tasks")
             logger.debug(f"Tasks: {[t.model_dump() for t in tasks]}")
 
@@ -98,14 +100,47 @@ Generate specific research tasks with search queries. For each topic, create tas
             # Return default tasks
             return self._create_default_tasks(enhanced_prompt)
 
+    def _limit_tasks_by_depth(
+        self,
+        tasks: List[ResearchTask],
+        enhanced_prompt: EnhancedPrompt,
+    ) -> List[ResearchTask]:
+        """Keep task counts aligned with the selected research depth."""
+        max_per_topic = {
+            "quick": 1,
+            "medium": 3,
+            "deep": 6,
+        }.get(enhanced_prompt.research_depth, 3)
+
+        limited = []
+        per_topic_counts = {topic: 0 for topic in enhanced_prompt.topics}
+
+        for task in tasks:
+            topic = task.topic if task.topic in per_topic_counts else enhanced_prompt.topics[0]
+            if per_topic_counts[topic] >= max_per_topic:
+                continue
+            per_topic_counts[topic] += 1
+            limited.append(task.model_copy(update={"task_id": len(limited) + 1, "topic": topic}))
+
+        if not limited:
+            return self._create_default_tasks(enhanced_prompt)
+
+        return limited
+
     def _create_default_tasks(self, enhanced_prompt: EnhancedPrompt) -> List[ResearchTask]:
         """Create default tasks if planning fails."""
         tasks = []
         task_id = 1
+        max_per_topic = {
+            "quick": 1,
+            "medium": 3,
+            "deep": 6,
+        }.get(enhanced_prompt.research_depth, 3)
 
         for topic in enhanced_prompt.topics:
+            topic_tasks = []
             # Overview task
-            tasks.append(
+            topic_tasks.append(
                 ResearchTask(
                     task_id=task_id,
                     topic=topic,
@@ -114,13 +149,12 @@ Generate specific research tasks with search queries. For each topic, create tas
                     description=f"Get overview of {topic}",
                 )
             )
-            task_id += 1
 
             # Applications/Use cases
             if "applications" in " ".join(enhanced_prompt.required_sections).lower() or "findings" in " ".join(
                 enhanced_prompt.required_sections
             ).lower():
-                tasks.append(
+                topic_tasks.append(
                     ResearchTask(
                         task_id=task_id,
                         topic=topic,
@@ -129,11 +163,10 @@ Generate specific research tasks with search queries. For each topic, create tas
                         description=f"Research applications and use cases of {topic}",
                     )
                 )
-                task_id += 1
 
             # Challenges
             if "challenges" in " ".join(enhanced_prompt.required_sections).lower():
-                tasks.append(
+                topic_tasks.append(
                     ResearchTask(
                         task_id=task_id,
                         topic=topic,
@@ -142,13 +175,12 @@ Generate specific research tasks with search queries. For each topic, create tas
                         description=f"Research challenges and limitations of {topic}",
                     )
                 )
-                task_id += 1
 
             # Future trends
             if "trends" in " ".join(enhanced_prompt.required_sections).lower() or "future" in " ".join(
                 enhanced_prompt.required_sections
             ).lower():
-                tasks.append(
+                topic_tasks.append(
                     ResearchTask(
                         task_id=task_id,
                         topic=topic,
@@ -157,6 +189,9 @@ Generate specific research tasks with search queries. For each topic, create tas
                         description=f"Research future trends in {topic}",
                     )
                 )
+
+            for task in topic_tasks[:max_per_topic]:
+                tasks.append(task.model_copy(update={"task_id": task_id}))
                 task_id += 1
 
         return tasks

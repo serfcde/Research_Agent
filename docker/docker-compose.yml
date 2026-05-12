@@ -12,7 +12,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       - SERPAPI_API_KEY=${SERPAPI_API_KEY}
-      - DEBUG=true
+      - APP_DEBUG=true
       - LOG_LEVEL=INFO
     volumes:
       - ./research_outputs:/app/research_outputs

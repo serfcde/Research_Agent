@@ -47,6 +47,8 @@ research_outputs/
 *.txt
 *.md
 *.json
+!frontend/**/*.json
+!frontend/**/*.md
 
 # Docker
 docker-compose.override.yml

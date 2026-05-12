@@ -101,7 +101,13 @@ def mock_research_report():
         },
         comparative_analysis="Both technologies are transformative...",
         conclusion="In conclusion, both quantum computing and edge AI are important...",
-        citations=[],
+        citations=[
+            ResearchSource(
+                title="Example Research Source",
+                url="https://example.com/research",
+                snippet="Example citation snippet",
+            )
+        ],
         total_words=2500,
     )
 

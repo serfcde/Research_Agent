@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  research-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: research-agent
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY:-}
+      - APP_DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - RESEARCH_OUTPUT_DIR=/app/research_outputs
+      - RESEARCH_TIMEOUT_MINUTES=10
+      - LLM_TIMEOUT_SECONDS=60
+      - TAVILY_MAX_CONCURRENT_SEARCHES=5
+      - TAVILY_SEARCH_TIMEOUT_SECONDS=30
+    volumes:
+      - ./research_outputs:/app/research_outputs
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - research-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Optional: PostgreSQL for research history
+  # db:
+  #   image: postgres:15-alpine
+  #   container_name: research-agent-db
+  #   environment:
+  #     POSTGRES_DB: research_db
+  #     POSTGRES_USER: researcher
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   networks:
+  #     - research-network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U researcher"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+networks:
+  research-network:
+    driver: bridge
+
+# volumes:
+#   postgres_data:
