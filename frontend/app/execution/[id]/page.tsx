@@ -61,7 +61,9 @@ export default function LiveExecutionPage() {
       <WorkflowGraph agents={activeRun.agents} />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {activeRun.agents.map((agent) => <AgentStatusCard key={agent.id} agent={agent} />)}
+        {(activeRun.agents || []).map((agent) => (
+  <AgentStatusCard key={agent.id} agent={agent} />
+))}
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">
@@ -71,20 +73,20 @@ export default function LiveExecutionPage() {
             <CardDescription>Streaming events from agent orchestration and tools.</CardDescription>
           </CardHeader>
           <CardContent>
-            <LiveLogs logs={activeRun.logs} />
+            <LiveLogs logs={activeRun.logs ?? []} />
           </CardContent>
         </Card>
 
         <div className="space-y-4">
-          <InfoCard icon={Cpu} title="Token Usage" value={formatNumber(activeRun.tokenUsage.total)} detail={`${formatNumber(activeRun.tokenUsage.prompt)} prompt · ${formatNumber(activeRun.tokenUsage.completion)} completion`} />
-          <InfoCard icon={TimerReset} title="Estimated Completion" value={activeRun.estimatedCompletion} detail={activeRun.status === "completed" ? "Workflow finished" : "Adaptive estimate"} />
+          <InfoCard icon={Cpu} title="Token Usage" value={formatNumber(activeRun.tokenUsage?.total ?? 0)} detail={`${formatNumber(activeRun.tokenUsage?.prompt ?? 0)} prompt · ${formatNumber(activeRun.tokenUsage?.completion ?? 0)} completion`} />
+          <InfoCard icon={TimerReset} title="Estimated Completion" value={activeRun.estimatedCompletion ?? "—"} detail={activeRun.status === "completed" ? "Workflow finished" : "Adaptive estimate"} />
           <Card>
             <CardHeader>
               <CardTitle>Tool Execution</CardTitle>
               <CardDescription>Search jobs, source collection, and retrieval status.</CardDescription>
             </CardHeader>
             <CardContent>
-              <ToolActivityFeed tools={activeRun.tools} />
+              <ToolActivityFeed tools={activeRun.tools ?? []} />
             </CardContent>
           </Card>
         </div>

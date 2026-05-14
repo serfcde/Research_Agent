@@ -1,0 +1,20 @@
+{"name":"AWS access key in URL path","category":"DLP Exfiltration","detected":true,"detail":"core_dlp"}
+{"name":"Base64-encoded GitHub token","category":"DLP Exfiltration","detected":true,"detail":"dlp"}
+{"name":"Hex-encoded Slack token","category":"DLP Exfiltration","detected":true,"detail":"dlp"}
+{"name":"Anthropic API key in text body","category":"DLP Exfiltration","detected":true,"detail":"1 matches"}
+{"name":"OpenAI API key in URL","category":"DLP Exfiltration","detected":true,"detail":"dlp"}
+{"name":"Private key (WIF format) in URL","category":"DLP Exfiltration","detected":true,"detail":"dlp"}
+{"name":"Classic instruction override","category":"Prompt Injection","detected":true,"detail":"Prompt Injection"}
+{"name":"Leetspeak evasion","category":"Prompt Injection","detected":true,"detail":"Prompt Injection"}
+{"name":"Base64-wrapped injection","category":"Prompt Injection","detected":true,"detail":"Prompt Injection"}
+{"name":"Credential solicitation","category":"Prompt Injection","detected":true,"detail":"Credential Solicitation"}
+{"name":"Memory persistence directive","category":"Prompt Injection","detected":true,"detail":"Memory Persistence Directive"}
+{"name":"Role override (DAN jailbreak)","category":"Prompt Injection","detected":true,"detail":"Role Override"}
+{"name":"IMPORTANT tag in description","category":"Tool Poisoning","detected":true,"detail":"1 matches"}
+{"name":"Exfiltration in schema default","category":"Tool Poisoning","detected":true,"detail":"1 matches"}
+{"name":"Cross-tool manipulation","category":"Tool Poisoning","detected":true,"detail":"1 matches"}
+{"name":"Vendor extension with instructions","category":"Tool Poisoning","detected":true,"detail":"1 matches"}
+{"name":"URL-encoded secret in path","category":"URL Evasion","detected":true,"detail":"core_dlp"}
+{"name":"CRLF injection in URL","category":"URL Evasion","detected":true,"detail":"crlf_injection"}
+{"name":"Overlong URL","category":"URL Evasion","detected":true,"detail":"length"}
+{"name":"Path traversal","category":"URL Evasion","detected":true,"detail":"path_traversal"}

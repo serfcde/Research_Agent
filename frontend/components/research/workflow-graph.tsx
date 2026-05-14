@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 const nodeIcons = [WandSparkles, ListChecks, Bot, Search, FileText];
 
-export function WorkflowGraph({ agents }: { agents: AgentNode[] }) {
+export function WorkflowGraph({ agents = [] }: { agents: AgentNode[] }) {
   return (
     <div className="overflow-x-auto pb-2">
       <div className="relative flex min-w-[760px] items-center justify-between gap-4 rounded-lg border border-border bg-background/35 p-5">

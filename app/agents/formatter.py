@@ -23,12 +23,14 @@ class FormatterAgent:
         self.llm = get_llm_service()
 
     def _group_results_by_topic(self, results: List[TaskResult]) -> Dict[str, List[TaskResult]]:
-        """Group task results by topic."""
+        """Group task results by topic, case-insensitive."""
         grouped = {}
         for result in results:
-            if result.topic not in grouped:
-                grouped[result.topic] = []
-            grouped[result.topic].append(result)
+            # Normalize key to lowercase for grouping
+            key = result.topic.strip().lower()
+            if key not in grouped:
+                grouped[key] = []
+            grouped[key].append(result)
         return grouped
 
     async def _generate_introduction(
@@ -97,9 +99,9 @@ Make it comprehensive and approximately 150 words."""
 
         topics_list = []
         for topic in topics:
-            findings = " ".join([r.findings for r in grouped_results.get(topic, [])])
+            findings = " ".join([r.findings for r in grouped_results.get(topic.strip().lower(), [])])
             topics_list.append(f"{topic}: {findings[:500]}")
-
+            
         user_message = f"""Compare and contrast the following:
 
 {chr(10).join(topics_list)}
@@ -183,7 +185,9 @@ Write a 300-word comparative analysis highlighting similarities, differences, an
             logger.debug("Formatting sections...")
             sections = {}
             for topic in enhanced_prompt.topics:
-                topic_results = grouped.get(topic, [])
+                # ✅ normalize lookup key
+                topic_key = topic.strip().lower()
+                topic_results = grouped.get(topic_key, [])
                 if topic_results:
                     sections[topic] = self._format_section_text(topic, topic_results)
                 else:

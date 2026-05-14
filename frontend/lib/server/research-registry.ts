@@ -125,8 +125,8 @@ export function setAgentStage(agents: AgentNode[], activeIndex: number, activePr
 }
 
 export async function postBackend<T>(path: string, body: unknown): Promise<T> {
-  const backendUrl = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || "http://127.0.0.1:8001";
-  const response = await fetch(`${backendUrl}${path}`, {
+  const backendUrl = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || "http://127.0.0.1:8000";
+  const response = await fetch(`${backendUrl}${path}`, {  // ✅ use backendUrl and path
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

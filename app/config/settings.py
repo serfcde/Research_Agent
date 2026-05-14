@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     debug: bool = Field(default=True, validation_alias="APP_DEBUG")
     log_level: str = "INFO"
 
-    # OpenAI Configuration
-    openai_api_key: str
+    # OpenAI Configuration (now optional — using Groq instead)
+    openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_model_fallback: str = "gpt-4o-mini"
     llm_timeout_seconds: int = 60
@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # SerpAPI Configuration (fallback)
     serpapi_api_key: str = ""
 
+    # Groq Configuration
+    groq_api_key: str = ""
+
     # Research Configuration
     research_output_dir: str = "./research_outputs"
     research_timeout_minutes: int = 10
@@ -43,6 +46,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     def get_research_output_dir(self) -> Path:

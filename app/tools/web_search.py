@@ -1,9 +1,10 @@
-"""Web search tool integration with Tavily and fallback to SerpAPI."""
+"""Web search tool integration with Tavily and fallback to SerpAPI.
+All outbound HTTP traffic is routed through the Pipelock firewall proxy.
+"""
 
 import asyncio
 import json
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 import httpx
 from tenacity import (
     retry,
@@ -17,18 +18,30 @@ from app.models.schemas import ResearchSource
 
 logger = get_logger(__name__)
 
+# Pipelock forward proxy — all search traffic is inspected here
+PIPELOCK_PROXY = "http://127.0.0.1:8888"
+
+
+def _proxied_client(timeout: int) -> httpx.AsyncClient:
+    """Return an httpx client that routes through the Pipelock proxy."""
+    return httpx.AsyncClient(
+        proxy=PIPELOCK_PROXY,
+        verify=False,   # Pipelock terminates TLS locally
+        timeout=timeout,
+    )
+
 
 class WebSearchClient:
-    """Client for performing web searches."""
+    """Client for performing web searches via Pipelock firewall proxy."""
 
     def __init__(self):
-        """Initialize web search client."""
         self.tavily_api_key = settings.tavily_api_key
         self.serpapi_api_key = settings.serpapi_api_key
         self.timeout = settings.tavily_search_timeout_seconds
         self.max_retries = settings.tavily_max_retries
         self.tavily_base_url = "https://api.tavily.com"
         self.serpapi_base_url = "https://serpapi.com/search.json"
+        logger.info("Web search client initialized with Pipelock proxy")
 
     @retry(
         stop=stop_after_attempt(2),
@@ -39,16 +52,8 @@ class WebSearchClient:
         ),
     )
     async def tavily_search(self, query: str) -> Dict[str, Any]:
-        """
-        Search using Tavily API (AI-optimized).
-
-        Args:
-            query: Search query
-
-        Returns:
-            Search results dictionary
-        """
-        logger.info(f"Tavily search: {query[:60]}...")
+        """Search using Tavily API, routed through Pipelock."""
+        logger.info(f"Tavily search via Pipelock: {query[:60]}...")
 
         payload = {
             "api_key": self.tavily_api_key,
@@ -58,15 +63,14 @@ class WebSearchClient:
         }
 
         try:
-            async with httpx.AsyncClient() as client:
+            # ✅ Use proxied client — traffic visible in Pipelock dashboard
+            async with _proxied_client(self.timeout) as client:
                 response = await client.post(
                     f"{self.tavily_base_url}/search",
                     json=payload,
-                    timeout=self.timeout,
                 )
                 response.raise_for_status()
                 result = response.json()
-
                 logger.info(f"Tavily returned {len(result.get('results', []))} results")
                 return result
 
@@ -83,16 +87,8 @@ class WebSearchClient:
         ),
     )
     async def serpapi_search(self, query: str) -> Dict[str, Any]:
-        """
-        Search using SerpAPI (fallback).
-
-        Args:
-            query: Search query
-
-        Returns:
-            Search results dictionary
-        """
-        logger.info(f"SerpAPI search (fallback): {query[:60]}...")
+        """Search using SerpAPI (fallback), routed through Pipelock."""
+        logger.info(f"SerpAPI search via Pipelock (fallback): {query[:60]}...")
 
         params = {
             "q": query,
@@ -102,17 +98,16 @@ class WebSearchClient:
         }
 
         try:
-            async with httpx.AsyncClient() as client:
+            # ✅ Use proxied client
+            async with _proxied_client(self.timeout) as client:
                 response = await client.get(
                     self.serpapi_base_url,
                     params=params,
-                    timeout=self.timeout,
                     follow_redirects=True,
                 )
                 response.raise_for_status()
                 result = response.json()
-
-                logger.info(f"SerpAPI returned results")
+                logger.info("SerpAPI returned results")
                 return result
 
         except httpx.HTTPError as e:
@@ -120,7 +115,6 @@ class WebSearchClient:
             raise
 
     def _parse_tavily_results(self, tavily_response: Dict[str, Any]) -> List[ResearchSource]:
-        """Parse Tavily API response into ResearchSource objects."""
         sources = []
         for result in tavily_response.get("results", []):
             source = ResearchSource(
@@ -132,7 +126,6 @@ class WebSearchClient:
         return sources
 
     def _parse_serpapi_results(self, serpapi_response: Dict[str, Any]) -> List[ResearchSource]:
-        """Parse SerpAPI response into ResearchSource objects."""
         sources = []
         for result in serpapi_response.get("organic_results", [])[:5]:
             source = ResearchSource(
@@ -144,21 +137,9 @@ class WebSearchClient:
         return sources
 
     async def search(self, query: str, use_fallback: bool = True) -> tuple[str, List[ResearchSource]]:
-        """
-        Perform web search with fallback logic.
-
-        Args:
-            query: Search query
-            use_fallback: Whether to fallback to SerpAPI on Tavily failure
-
-        Returns:
-            Tuple of (combined_content, sources)
-        """
         try:
             result = await self.tavily_search(query)
             sources = self._parse_tavily_results(result)
-
-            # Combine content from all results
             content = " ".join([s.snippet for s in sources])
             return content, sources
 
@@ -174,32 +155,19 @@ class WebSearchClient:
                 except Exception as fallback_error:
                     logger.error(f"SerpAPI fallback also failed: {str(fallback_error)}")
                     return "", []
-
             raise
 
 
-# Singleton instance
 _search_client: Optional[WebSearchClient] = None
 
 
 def get_search_client() -> WebSearchClient:
-    """Get web search client singleton."""
     global _search_client
     if _search_client is None:
         _search_client = WebSearchClient()
-        logger.info("Web search client initialized")
     return _search_client
 
 
 async def search_web(query: str) -> tuple[str, List[ResearchSource]]:
-    """
-    Convenience function for web search.
-
-    Args:
-        query: Search query
-
-    Returns:
-        Tuple of (content, sources)
-    """
     client = get_search_client()
     return await client.search(query)
