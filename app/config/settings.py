@@ -15,24 +15,31 @@ class Settings(BaseSettings):
     debug: bool = Field(default=True, validation_alias="APP_DEBUG")
     log_level: str = "INFO"
 
-    # OpenAI Configuration (now optional — using Groq instead)
-    openai_api_key: str = ""
-    openai_model: str = "gpt-4o-mini"
-    openai_model_fallback: str = "gpt-4o-mini"
+    # LLM Configuration (Groq)
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
     llm_timeout_seconds: int = 60
     llm_max_tokens: int = 4000
 
+    # Pipelock LLM-traffic proxy (optional local dev tooling)
+    pipelock_proxy_url: str = ""
+    pipelock_proxy_insecure: bool = False
+
     # Tavily API Configuration
-    tavily_api_key: str
+    tavily_api_key: str = ""
     tavily_max_concurrent_searches: int = 5
     tavily_search_timeout_seconds: int = 30
     tavily_max_retries: int = 2
 
-    # SerpAPI Configuration (fallback)
+    # SerpAPI Configuration (search fallback)
     serpapi_api_key: str = ""
 
-    # Groq Configuration
-    groq_api_key: str = ""
+    # Persistence (Postgres: runs + LangGraph checkpoints). Empty = in-memory.
+    database_url: str = ""
+
+    # API security. Comma-separated X-API-Key values; empty = auth disabled.
+    api_keys: str = ""
+    cors_origins: str = "http://localhost:3000"
 
     # Research Configuration
     research_output_dir: str = "./research_outputs"

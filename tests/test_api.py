@@ -81,10 +81,10 @@ class TestExecutionEndpoint:
         response = client.post(
             "/api/execute-research",
             json={"tasks": [sample_research_task]},
-            timeout=120,
         )
-        # Should get 200 or timeout, depending on network
-        assert response.status_code in [200, 504, 408]
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["results"]) == 1
 
 
 class TestFormattingEndpoint:
@@ -109,7 +109,7 @@ class TestFormattingEndpoint:
                 "enhanced_prompt": sample_enhanced_prompt,
             },
         )
-        assert response.status_code in [200, 500]  # May fail due to LLM
+        assert response.status_code == 200
 
 
 class TestStatusEndpoint:

@@ -2,6 +2,26 @@ export type ResearchDepth = "quick" | "medium" | "deep";
 export type AgentStatus = "idle" | "queued" | "running" | "completed" | "failed";
 export type LogLevel = "info" | "success" | "warning" | "error" | "tool";
 
+export interface PipelockCall {
+  domain: string;
+  bytes: number;
+  durationMs: number;
+}
+ 
+export interface AgentStep {
+  agentId: string;
+  agentName: string;
+  prompt: string;
+  output: string;
+  durationMs: number;
+  tokens?: number;
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string | null;
+  pipelockRequestIds?: string[];
+  pipelockCalls?: { domain: string; bytes: number; durationMs: number }[];
+}
+
 export interface AgentNode {
   id: string;
   name: string;
@@ -62,6 +82,10 @@ export interface ResearchRun {
   logs: ActivityLog[];
   tools: ToolExecution[];
   report?: ResearchReport;
+  steps?: AgentStep[];
+  traceId?: string;
+  traceSpans?: any[];
+  traceGraph?: { nodes: any[]; edges: any[] };
 }
 
 export interface StartResearchPayload {

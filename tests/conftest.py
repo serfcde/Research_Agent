@@ -2,7 +2,40 @@
 
 import pytest
 from app.main import create_app
+from app.models.schemas import ResearchSource
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def no_live_apis(monkeypatch):
+    """
+    Keep the suite hermetic: block real LLM calls and can search results
+    at class level, so it also covers module-level agent singletons.
+
+    Agents handle LLM failure via their heuristic fallback paths, which is
+    exactly what these tests should exercise. Tests that want specific LLM
+    output inject their own mock service instead (see tests/fixtures.py).
+    """
+    from app.services.llm_service import LLMService
+    from app.tools.web_search import WebSearchClient
+
+    async def _blocked_llm(self, *args, **kwargs):
+        raise RuntimeError("Live LLM calls are disabled in tests")
+
+    async def _canned_search(self, query, use_fallback=True):
+        return (
+            f"Canned search results for: {query}",
+            [
+                ResearchSource(
+                    title="Test Source",
+                    url="https://example.com/test",
+                    snippet="Canned snippet for tests",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(LLMService, "call_llm", _blocked_llm)
+    monkeypatch.setattr(WebSearchClient, "search", _canned_search)
 
 
 @pytest.fixture

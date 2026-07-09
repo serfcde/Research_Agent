@@ -1,107 +1,107 @@
-"""Main orchestration service - coordinates all agents."""
+"""
+Main orchestration service.
+
+CHANGED (LangGraph refactor):
+  - ResearchOrchestrator.run_research_pipeline() now invokes the compiled
+    LangGraph instead of calling agents directly.
+  - All agent logic is unchanged; only the calling convention is different.
+  - PipelabTracker is injected into the graph state so every node emits
+    structured execution events to logs/pipelab_trace.jsonl.
+
+Public API is identical to the original — callers (api/routes.py) require
+no modification.
+"""
 
 import time
-from app.agents.prompt_enhancer import get_prompt_clarifier
-from app.agents.planner import get_planner
-from app.agents.worker import get_worker
-from app.agents.formatter import get_formatter
-from app.tools.file_writer import get_file_writer
-from app.models.schemas import (
-    FullResearchResponse,
-    ResearchReport,
-)
+from app.graph.graph import get_research_graph
+from app.graph.tracker import new_tracker
+from app.models.schemas import FullResearchResponse
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class ResearchOrchestrator:
-    """Main orchestrator for end-to-end research pipeline."""
+    """
+    Orchestrator for the end-to-end research pipeline.
+
+    The pipeline is now implemented as a LangGraph StateGraph:
+
+      prompt_enhancer → planner → worker → formatter
+
+    Each node wraps the corresponding agent class (unchanged) and
+    emits Pipelab tracking events at its start and end boundaries.
+    """
 
     async def run_research_pipeline(self, user_prompt: str) -> FullResearchResponse:
         """
-        Run complete research pipeline.
+        Run the complete research pipeline.
 
         Args:
-            user_prompt: User research prompt
+            user_prompt: Raw user research prompt.
 
         Returns:
-            Full research response with report and file path
+            FullResearchResponse with the report and saved file path.
         """
         pipeline_start = time.time()
+
         logger.info("=" * 80)
-        logger.info(f"Starting research pipeline for: {user_prompt[:80]}...")
+        logger.info(f"[Graph] Starting research pipeline: {user_prompt[:80]}...")
         logger.info("=" * 80)
+
+        # Create a Pipelab tracker for this run and emit run_start
+        tracker = new_tracker()
+        tracker.emit_run_start(user_prompt)
 
         try:
-            # Step 1: Clarify prompt
-            logger.info("\n[Step 1/5] Enhancing prompt...")
-            clarifier = get_prompt_clarifier()
-            enhanced_prompt = await clarifier.enhance_prompt(user_prompt)
-            logger.info(f"Topics identified: {enhanced_prompt.topics}")
-            logger.info(f"Research depth: {enhanced_prompt.research_depth}")
+            graph = get_research_graph()
 
-            # Step 2: Plan research
-            logger.info("\n[Step 2/5] Creating research plan...")
-            planner = get_planner()
-            tasks = await planner.create_plan(enhanced_prompt)
-            logger.info(f"Created {len(tasks)} research tasks")
+            # Initial state — tracker is passed as a private key so nodes
+            # can emit events without it appearing in the public schema.
+            initial_state = {
+                "user_prompt": user_prompt,
+                "_tracker": tracker,
+                "execution_events": [],
+            }
 
-            # Step 3: Execute tasks
-            logger.info(f"\n[Step 3/5] Executing {len(tasks)} tasks (concurrently)...")
-            worker = get_worker()
-            task_results = await worker.execute_tasks(tasks)
+            # Invoke the graph; LangGraph merges each node's return dict
+            # into the accumulated state automatically.
+            final_state = await graph.ainvoke(initial_state)
 
-            # Count results
-            completed = sum(1 for r in task_results if r.status == "completed")
-            logger.info(f"Task execution complete: {completed}/{len(task_results)} successful")
-
-            # Step 4: Format report
-            logger.info("\n[Step 4/5] Formatting research report...")
-            formatter = get_formatter()
-            report = await formatter.format_report(task_results, enhanced_prompt)
-            logger.info(f"Report formatted: {report.total_words} words")
-
-            # Step 5: Save report
-            logger.info("\n[Step 5/5] Saving report to file...")
-            file_writer = get_file_writer()
-            report_text = formatter.report_to_text(report)
-            file_path = file_writer.save_report_txt(
-                report_text,
-                topic="_".join(enhanced_prompt.topics[:2]),
-            )
-            logger.info(f"Report saved to: {file_path}")
-
-            # Prepare response
             pipeline_time = time.time() - pipeline_start
+            tracker.emit_run_end(total_seconds=pipeline_time, status="completed")
+
             logger.info("=" * 80)
-            logger.info(f"Pipeline completed in {pipeline_time:.1f}s")
+            logger.info(f"[Graph] Pipeline completed in {pipeline_time:.1f}s")
             logger.info("=" * 80)
 
-            response = FullResearchResponse(
-                report=report,
-                file_path=str(file_path),
+            return FullResearchResponse(
+                report=final_state["report"],
+                file_path=final_state["file_path"],
                 status="completed",
                 total_execution_time_seconds=pipeline_time,
             )
 
-            return response
-
-        except Exception as e:
+        except Exception as exc:
             pipeline_time = time.time() - pipeline_start
-            logger.error(f"Pipeline failed after {pipeline_time:.1f}s: {str(e)}")
+            tracker.emit_run_end(total_seconds=pipeline_time, status="failed")
+
+            logger.error(f"[Graph] Pipeline failed after {pipeline_time:.1f}s: {exc}")
             logger.exception("Full traceback:")
             raise
 
 
-# Singleton instance
+# ---------------------------------------------------------------------------
+# Singleton helpers (unchanged API)
+# ---------------------------------------------------------------------------
+
 _orchestrator = None
 
 
 def get_orchestrator() -> ResearchOrchestrator:
-    """Get orchestrator singleton."""
+    """Return the orchestrator singleton."""
     global _orchestrator
     if _orchestrator is None:
         _orchestrator = ResearchOrchestrator()
-        logger.info("Research orchestrator initialized")
+        logger.info("Research orchestrator initialised (LangGraph backend)")
     return _orchestrator

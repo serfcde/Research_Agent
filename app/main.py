@@ -19,7 +19,21 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Log level: {settings.log_level}")
-    
+
+    missing = [
+        name
+        for name, value in (
+            ("GROQ_API_KEY", settings.groq_api_key),
+            ("TAVILY_API_KEY", settings.tavily_api_key),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Missing required environment variables: {', '.join(missing)}. "
+            "Copy .env.example to .env and fill in your API keys."
+        )
+
     yield
     
     # Shutdown

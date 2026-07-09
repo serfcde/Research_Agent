@@ -46,6 +46,9 @@ export default function LiveExecutionPage() {
           <FileText className="h-4 w-4" />
           Open Report
         </Button>
+        <Button onClick={() => router.push(`/execution/${activeRun.id}/graph`)}>
+          View Trace Graph
+        </Button>
       </div>
 
       <Card>
@@ -58,7 +61,7 @@ export default function LiveExecutionPage() {
         </CardContent>
       </Card>
 
-      <WorkflowGraph agents={activeRun.agents} />
+      <WorkflowGraph agents={activeRun.agents} steps={activeRun.steps ?? []} />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {(activeRun.agents || []).map((agent) => (

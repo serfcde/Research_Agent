@@ -1,4 +1,4 @@
-"""LLM service with Groq support — routed through Pipelock firewall proxy."""
+"""LLM service backed by Groq, with optional Pipelock proxy routing."""
 
 import json
 import httpx
@@ -15,27 +15,28 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Pipelock forward proxy address (change port if you configured a different one)
-PIPELOCK_PROXY = "http://127.0.0.1:8888"
-
 
 class LLMService:
-    """Service for interacting with Groq LLM via Pipelock firewall."""
+    """Service for interacting with the Groq LLM."""
 
     def __init__(self):
-        # ✅ Route all Groq API calls through Pipelock proxy for monitoring
-        http_client = httpx.AsyncClient(
-            proxy=PIPELOCK_PROXY,
-            verify=False,  # Pipelock terminates TLS locally; disable cert check for proxy
-        )
-        self.client = AsyncGroq(
-            api_key=settings.groq_api_key,
-            http_client=http_client,
-        )
-        self.model = "llama-3.3-70b-versatile"
+        client_kwargs: Dict[str, Any] = {"api_key": settings.groq_api_key}
+
+        if settings.pipelock_proxy_url:
+            # Route Groq traffic through the Pipelock forward proxy for
+            # monitoring. Cert verification stays on unless explicitly
+            # disabled for a local TLS-terminating proxy.
+            client_kwargs["http_client"] = httpx.AsyncClient(
+                proxy=settings.pipelock_proxy_url,
+                verify=not settings.pipelock_proxy_insecure,
+            )
+            logger.info(f"LLM traffic routed via Pipelock proxy: {settings.pipelock_proxy_url}")
+
+        self.client = AsyncGroq(**client_kwargs)
+        self.model = settings.groq_model
         self.timeout = settings.llm_timeout_seconds
         self.max_tokens = settings.llm_max_tokens
-        logger.info("LLM service initialized with Pipelock proxy")
+        logger.info(f"LLM service initialized (model={self.model})")
 
     @retry(
         stop=stop_after_attempt(3),
