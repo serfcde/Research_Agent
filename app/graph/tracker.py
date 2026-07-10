@@ -4,19 +4,21 @@ Pipelab execution tracker.
 Emits structured JSON events at each node boundary so the Pipelab
 dashboard can reconstruct the full execution graph:
 
-  node_start  →  node_end  (for each of the 4 agent nodes)
+  run_start → (node_start → node_end)* → run_end
 
-Each event is appended to logs/pipelab_trace.jsonl so the frontend
-lib/server/trace.ts can ingest it alongside the existing debug.log.
-No external SDK is required — Pipelab ingests the JSONL file via the
-existing Pipelock monitoring infrastructure.
+Each event is:
+  1. appended to logs/pipelab_trace.jsonl (durable trace), and
+  2. published to any in-process SSE subscribers for this run
+     (see subscribe()/unsubscribe()), enabling live streaming of
+     node transitions to the frontend.
 """
 
+import asyncio
 import json
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional, Set
 
 from app.utils.logger import get_logger
 
@@ -24,6 +26,60 @@ logger = get_logger(__name__)
 
 # Trace log path — sibling to the existing debug.log / error.log
 _TRACE_PATH = Path("logs/pipelab_trace.jsonl")
+
+# In-process event bus: run_id → set of subscriber queues.
+_subscribers: Dict[str, Set[asyncio.Queue]] = {}
+
+# Sentinel queued after run_end so subscribers know the stream is over.
+STREAM_END = {"event_type": "__stream_end__"}
+
+
+def subscribe(run_id: str) -> asyncio.Queue:
+    """Register a queue that receives every event emitted for run_id."""
+    queue: asyncio.Queue = asyncio.Queue()
+    _subscribers.setdefault(run_id, set()).add(queue)
+    return queue
+
+
+def unsubscribe(run_id: str, queue: asyncio.Queue) -> None:
+    """Remove a subscriber queue for run_id."""
+    queues = _subscribers.get(run_id)
+    if queues is not None:
+        queues.discard(queue)
+        if not queues:
+            _subscribers.pop(run_id, None)
+
+
+def _publish(run_id: str, event: dict) -> None:
+    for queue in _subscribers.get(run_id, ()):  # copy not needed: no removal here
+        queue.put_nowait(event)
+
+
+def read_run_events(run_id: str) -> list:
+    """
+    Replay all events already persisted for run_id from the JSONL trace.
+
+    Used by the SSE endpoint so late subscribers still see the full
+    node-transition history of an in-flight (or finished) run.
+    """
+    events = []
+    try:
+        with _TRACE_PATH.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("run_id") == run_id:
+                    events.append(event)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        logger.warning(f"PipelabTracker: could not replay events — {exc}")
+    return events
 
 
 def _ensure_log_dir() -> None:
@@ -47,15 +103,17 @@ class PipelabTracker:
     Usage (inside a LangGraph node function):
 
         tracker = PipelabTracker(run_id)
-        with tracker.span("prompt_enhancer", state):
-            result = await agent.enhance_prompt(state["user_prompt"])
+        start_ts = tracker.emit_node_start("planner", input_summary={...})
+        ...
+        tracker.emit_node_end("planner", start_ts, output_summary={...})
     """
 
     def __init__(self, run_id: str):
         self.run_id = run_id
+        self.current_span_id: Optional[str] = None
 
     # ------------------------------------------------------------------ #
-    # Public helpers                                                       #
+    # Public helpers                                                      #
     # ------------------------------------------------------------------ #
 
     def emit_run_start(self, user_prompt: str) -> None:
@@ -98,15 +156,25 @@ class PipelabTracker:
         status = "error" if error else "ok"
         logger.debug(f"[Pipelab] node_end    ← {node}  ({duration_ms} ms, {status})")
 
-    def emit_run_end(self, total_seconds: float, status: str = "completed") -> None:
+    def emit_run_end(
+        self,
+        total_seconds: float,
+        status: str = "completed",
+        usage: Optional[dict] = None,
+    ) -> None:
         self._emit(
             event_type="run_end",
             node="orchestrator",
-            data={"total_seconds": round(total_seconds, 2), "status": status},
+            data={
+                "total_seconds": round(total_seconds, 2),
+                "status": status,
+                "usage": usage or {},
+            },
         )
+        _publish(self.run_id, STREAM_END)
 
     # ------------------------------------------------------------------ #
-    # Internal                                                             #
+    # Internal                                                            #
     # ------------------------------------------------------------------ #
 
     def _emit(
@@ -124,6 +192,7 @@ class PipelabTracker:
             "data": data or {},
         }
         _write_event(event)
+        _publish(self.run_id, event)
 
 
 def new_tracker() -> PipelabTracker:

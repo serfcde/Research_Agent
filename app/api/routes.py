@@ -1,25 +1,35 @@
 """API routes for research endpoints."""
 
-from fastapi import APIRouter, Request
+import asyncio
+import json
+import uuid
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
+
 from app.models.schemas import (
     PromptEnhancementRequest,
     PlanningRequest,
     ExecutionRequest,
     FormattingRequest,
     FullResearchRequest,
-    FullResearchResponse,
 )
 from app.agents.prompt_enhancer import get_prompt_clarifier
 from app.agents.planner import get_planner
 from app.agents.worker import get_worker
 from app.agents.formatter import get_formatter
 from app.services.orchestration import get_orchestrator
+from app.services.run_store import get_run_store
+from app.graph import tracker as tracker_bus
 from app.graph.tracker import PipelabTracker
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+# Keep references to in-flight background tasks so they aren't GC'd.
+_background_tasks: set = set()
 
 
 def _tracker_from(http_request: Request) -> PipelabTracker:
@@ -42,6 +52,112 @@ async def status():
     """Status endpoint."""
     return {"status": "API ready"}
 
+
+# --------------------------------------------------------------------------- #
+# Full pipeline as a durable background job                                    #
+# --------------------------------------------------------------------------- #
+
+@router.post("/research", status_code=202)
+async def start_research(request: FullResearchRequest, http_request: Request):
+    """
+    Start the end-to-end research pipeline as a background job.
+
+    Returns immediately with 202 and a run_id. Progress can be observed
+    on GET /research/{run_id} (polling) or GET /research/{run_id}/events
+    (SSE stream of node transitions). The X-Trace-Id header, when present,
+    becomes the run_id so frontend spans correlate with backend events.
+    """
+    run_id = http_request.headers.get("x-trace-id") or f"run_{uuid.uuid4().hex[:12]}"
+    logger.info(f"Starting research run {run_id}: {request.prompt[:60]}...")
+
+    store = get_run_store()
+    existing = await store.get_run(run_id)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=f"Run {run_id} already exists")
+    await store.create_run(run_id, request.prompt)
+
+    orchestrator = get_orchestrator()
+    task = asyncio.create_task(orchestrator.run_research_background(run_id, request.prompt))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return {"run_id": run_id, "status": "running"}
+
+
+@router.get("/research/{run_id}")
+async def get_research_run(run_id: str):
+    """Get the current status (and report, when finished) of a run."""
+    run = await get_run_store().get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    return run
+
+
+@router.get("/runs")
+async def list_research_runs(limit: int = 50):
+    """List recent runs, newest first (without report bodies)."""
+    return {"runs": await get_run_store().list_runs(limit=min(limit, 200))}
+
+
+@router.get("/research/{run_id}/events")
+async def stream_research_events(run_id: str, http_request: Request):
+    """
+    SSE stream of tracker events (run_start, node_start, node_end, run_end)
+    for a run. Replays events already emitted, then streams live ones.
+    """
+    store = get_run_store()
+    run = await store.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    async def event_stream():
+        # Subscribe BEFORE replaying so no live event is missed; replayed
+        # and queued events are deduped on (event_type, node, ts).
+        queue = tracker_bus.subscribe(run_id)
+        seen = set()
+        try:
+            for event in tracker_bus.read_run_events(run_id):
+                seen.add((event["event_type"], event["node"], event["ts"]))
+                yield f"data: {json.dumps(event)}\n\n"
+                if event["event_type"] == "run_end":
+                    return
+
+            # Run already finished but produced no run_end in the trace
+            # (e.g. trace file rotated): fall back to the stored status.
+            current = await store.get_run(run_id)
+            if current and current["status"] in ("completed", "failed"):
+                yield f"data: {json.dumps({'event_type': 'run_end', 'node': 'orchestrator', 'run_id': run_id, 'ts': None, 'data': {'status': current['status']}})}\n\n"
+                return
+
+            while True:
+                if await http_request.is_disconnected():
+                    return
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+                    continue
+                if event.get("event_type") == "__stream_end__":
+                    return
+                key = (event["event_type"], event["node"], event["ts"])
+                if key in seen:
+                    continue
+                yield f"data: {json.dumps(event)}\n\n"
+                if event["event_type"] == "run_end":
+                    return
+        finally:
+            tracker_bus.unsubscribe(run_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Per-step endpoints (used by tests and for debugging individual agents)       #
+# --------------------------------------------------------------------------- #
 
 @router.post("/enhance-prompt")
 async def enhance_prompt(request: PromptEnhancementRequest, http_request: Request):
@@ -137,12 +253,3 @@ async def format_report(request: FormattingRequest, http_request: Request):
     except Exception as exc:
         tracker.emit_node_end("formatter", start_ts, error=str(exc))
         raise
-
-
-@router.post("/research", response_model=FullResearchResponse)
-async def run_full_research(request: FullResearchRequest) -> FullResearchResponse:
-    """Execute complete end-to-end research pipeline via LangGraph."""
-    logger.info(f"Starting full research pipeline for: {request.prompt[:60]}...")
-    orchestrator = get_orchestrator()
-    response = await orchestrator.run_research_pipeline(request.prompt)
-    return response

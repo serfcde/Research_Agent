@@ -1,43 +1,37 @@
 // app/api/research/[id]/events/route.ts
-// Full tracing — trace_id, span_id, parent_span_id at every step
-// Pipelock request_ids attached to each span
+//
+// Thin SSE proxy: the FastAPI backend owns orchestration and streams
+// tracker events (run_start / node_start / node_end / run_end); this
+// route consumes that stream, rebuilds the span tree + UI run state
+// from the events, and re-emits StreamEvents for the browser.
+// The run id doubles as backend run_id and trace id.
 
 import {
-  appendLog, estimateTokens, getRun, mapBackendReport,
+  appendLog, estimateTokens, getBackend, getBackendUrl, backendHeaders, getRun, mapBackendReport,
   patchRun, setAgentStage, upsertTool,
 } from "@/lib/server/research-registry";
 import {
-  attachPipelockRequestId, createTrace, endSpan,
-  spansToGraph, startSpan, type Span, type TraceContext,
+  createTrace, endSpan, spansToGraph, startSpan, type Span, type TraceContext,
 } from "@/lib/server/trace";
-import type { AgentNode, AgentStep, ResearchRun, StreamEvent, ToolExecution } from "@/types/research";
+import type { AgentStep, LogLevel, StreamEvent, ToolExecution } from "@/types/research";
 
 export const dynamic = "force-dynamic";
 
-// Wraps fetch to extract Pipelock's request_id from response headers
-async function postBackendTraced<T>(path: string, body: unknown, span: Span): Promise<T> {
-  const backendUrl = process.env.BACKEND_API_URL || "http://127.0.0.1:8000";
-  const response = await fetch(`${backendUrl}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Trace-Id": span.trace_id,
-      "X-Span-Id": span.span_id,
-    },
-    body: JSON.stringify(body),
-    cache: "no-store",
-  });
-
-  // Pipelock injects X-Pipelock-Request-Id on proxied responses
-  const pipelockReqId = response.headers.get("x-pipelock-request-id") || response.headers.get("X-Pipelock-Request-Id");
-  if (pipelockReqId) attachPipelockRequestId(span, pipelockReqId);
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`${path} failed ${response.status}: ${text}`);
-  }
-  return response.json() as Promise<T>;
+interface TrackerEvent {
+  run_id: string;
+  event_type: "run_start" | "node_start" | "node_end" | "run_end" | string;
+  node: string;
+  ts: number | null;
+  data: Record<string, any>;
 }
+
+const NODE_META: Record<string, { index: number; label: string; startProgress: number; endProgress: number }> = {
+  prompt_enhancer: { index: 0, label: "Prompt Enhancer", startProgress: 8, endProgress: 20 },
+  planner: { index: 1, label: "Planner Agent", startProgress: 26, endProgress: 40 },
+  worker: { index: 2, label: "Worker Agent", startProgress: 46, endProgress: 68 },
+  critic: { index: 3, label: "Critic Agent", startProgress: 72, endProgress: 80 },
+  formatter: { index: 4, label: "Formatter Agent", startProgress: 84, endProgress: 97 },
+};
 
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   const encoder = new TextEncoder();
@@ -45,8 +39,8 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
     async start(controller) {
       const send = (event: StreamEvent) =>
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-      const run = getRun(params.id);
 
+      const run = getRun(params.id);
       if (!run) {
         send({ type: "error", message: "Research run not found. Start a new workflow from the dashboard." });
         controller.close(); return;
@@ -57,13 +51,11 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
       }
 
       try {
-        await runBackendPipeline(params.id, send);
+        await proxyBackendEvents(params.id, send);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
-        const current = getRun(params.id);
-        const failedAgents = current ? setAgentStage(current.agents, activeAgentIndex(current.agents), 100, true) : undefined;
         const log = appendLog(params.id, "system", "error", message);
-        const failedRun = patchRun(params.id, { status: "failed", currentTask: "Pipeline failed", agents: failedAgents });
+        const failedRun = patchRun(params.id, { status: "failed", currentTask: "Pipeline failed" });
         send({ type: "error", run: failedRun, log, message });
       } finally {
         controller.close();
@@ -76,150 +68,208 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   });
 }
 
-async function runBackendPipeline(id: string, send: (event: StreamEvent) => void) {
-  const run = getRun(id);
-  if (!run) throw new Error("Research run not found");
+async function proxyBackendEvents(id: string, send: (event: StreamEvent) => void) {
+  const response = await fetch(`${getBackendUrl()}/api/research/${id}/events`, {
+    headers: backendHeaders({ Accept: "text/event-stream" }),
+    cache: "no-store",
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`Backend event stream failed with ${response.status}`);
+  }
 
   const trace: TraceContext = createTrace();
+  trace.trace_id = id;
   const steps: AgentStep[] = [];
+  const rootSpan = startSpan(trace, "research_run", null, { run_id: id });
+  const openSpans: Record<string, Span> = {};
+  let lastSpanId = rootSpan.span_id;
+  let totalTokens = 0;
 
-  const emit = (patch: Partial<ResearchRun>, agent: string, message: string) => {
-    const log = appendLog(id, agent, "info", message);
-    const next = patchRun(id, patch);
-    send({ type: "status", run: next, log });
-    return next;
-  };
+  const log = (agent: string, level: LogLevel, message: string) => appendLog(id, agent, level, message);
 
-  // Root span
-  const rootSpan = startSpan(trace, "research_run", null, { prompt: run.prompt });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
 
-  // ── Prompt Enhancer ──────────────────────────────────────────────────────
-  const promptSpan = startSpan(trace, "prompt_enhancer", rootSpan.span_id, { transition_label: "raw prompt" });
-  emit({ status: "running", progress: 8, currentTask: "Prompt Enhancer running", agents: setAgentStage(run.agents, 0, 45), tokenUsage: tokenUsage(run.prompt) },
-    "prompt", `[trace:${trace.trace_id}][span:${promptSpan.span_id}] /api/enhance-prompt`);
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
 
-  const enhancedPrompt = await postBackendTraced<{
-    topics: string[]; research_depth: "quick"|"medium"|"deep"; required_sections: string[]; compare_topics: boolean; focus_areas: string[];
-  }>("/api/enhance-prompt", { prompt: run.prompt }, promptSpan);
-  enhancedPrompt.research_depth = run.depth;
-  endSpan(promptSpan, { topics: enhancedPrompt.topics.join(", ") });
-  steps.push(toStep(promptSpan, "Prompt Enhancer", run.prompt,
-    JSON.stringify({ topics: enhancedPrompt.topics, depth: enhancedPrompt.research_depth }, null, 2),
-    estimateTokens(run.prompt + JSON.stringify(enhancedPrompt))));
+    let boundary: number;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const chunk = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const dataLine = chunk.split("\n").find((line) => line.startsWith("data: "));
+      if (!dataLine) continue; // heartbeat / comment
 
-  let current = patchRun(id, { enhancedPrompt, steps, traceId: trace.trace_id, progress: 22,
-    currentTask: `Topics: ${enhancedPrompt.topics.join(" vs ")}`, agents: setAgentStage(getRun(id)!.agents, 1, 20),
-    tokenUsage: tokenUsage(run.prompt, JSON.stringify(enhancedPrompt)) });
-  send({ type: "status", run: current, log: appendLog(id, "prompt", "success", `[span:${promptSpan.span_id}] Topics: ${enhancedPrompt.topics.join(", ")}`) });
+      const event = JSON.parse(dataLine.slice(6)) as TrackerEvent;
+      const finished = await handleEvent(event);
+      if (finished) return;
+    }
+  }
 
-  // ── Planner ──────────────────────────────────────────────────────────────
-  const plannerSpan = startSpan(trace, "planner_agent", promptSpan.span_id, { transition_label: "enhanced prompt" });
-  emit({ progress: 28, currentTask: "Planner creating tasks", agents: setAgentStage(getRun(id)!.agents, 1, 55) },
-    "planner", `[trace:${trace.trace_id}][span:${plannerSpan.span_id}][parent:${plannerSpan.parent_span_id}] /api/plan-research`);
+  // Stream ended without run_end — resolve final state from the run record.
+  await finalize();
 
-  const planning = await postBackendTraced<{
-    tasks: Array<{ task_id: number; topic: string; subtopic: string; search_query: string; description: string }>;
-  }>("/api/plan-research", { enhanced_prompt: enhancedPrompt }, plannerSpan);
-  endSpan(plannerSpan, { task_count: planning.tasks.length });
-  steps.push(toStep(plannerSpan, "Planner Agent",
-    `Create research plan for: ${enhancedPrompt.topics.join(", ")}`,
-    planning.tasks.map((t, i) => `${i + 1}. ${t.description}\n   Query: "${t.search_query}"`).join("\n"),
-    estimateTokens(JSON.stringify(planning))));
+  async function handleEvent(event: TrackerEvent): Promise<boolean> {
+    const meta = NODE_META[event.node];
 
-  current = patchRun(id, { tasks: planning.tasks, steps, progress: 40, currentTask: `${planning.tasks.length} tasks created`,
-    agents: setAgentStage(getRun(id)!.agents, 2, 18), tokenUsage: tokenUsage(run.prompt, JSON.stringify(enhancedPrompt) + JSON.stringify(planning)) });
-  send({ type: "status", run: current, log: appendLog(id, "planner", "success", `[span:${plannerSpan.span_id}] ${planning.tasks.length} tasks`) });
+    if (event.event_type === "node_start" && meta) {
+      const input = event.data?.input ?? {};
+      const iteration = input.iteration ?? 0;
+      const replanning = event.node === "planner" && iteration > 0;
+      const span = startSpan(trace, event.node, lastSpanId, {
+        transition_label: replanning ? `replan (iteration ${iteration + 1})` : meta.label.toLowerCase(),
+      });
+      openSpans[event.node] = span;
 
-  // ── Worker ───────────────────────────────────────────────────────────────
-  const workerSpan = startSpan(trace, "worker_agent", plannerSpan.span_id, { transition_label: `${planning.tasks.length} tasks` });
-  const queuedTools = planning.tasks.slice(0, 6).map((task) => {
-    const tool: ToolExecution = { id: `task-${task.task_id}`, name: "Web Search Tool", query: task.search_query, status: "queued", durationMs: 0, sources: 0 };
-    upsertTool(id, tool); return tool;
-  });
-  emit({ progress: 48, currentTask: "Worker executing searches", tools: queuedTools, agents: setAgentStage(getRun(id)!.agents, 2, 60) },
-    "worker", `[trace:${trace.trace_id}][span:${workerSpan.span_id}][parent:${workerSpan.parent_span_id}] /api/execute-research`);
+      const current = getRun(id)!;
+      const next = patchRun(id, {
+        status: "running",
+        progress: Math.max(current.progress, meta.startProgress),
+        currentTask: replanning ? "Planner filling coverage gaps" : `${meta.label} running`,
+        agents: setAgentStage(current.agents, meta.index, 50),
+      });
+      send({ type: "status", run: next, log: log(event.node, "info", `[trace:${id}][span:${span.span_id}] ${meta.label} started${replanning ? " (replanning)" : ""}`) });
+      return false;
+    }
 
-  const execution = await postBackendTraced<{
-    results: Array<{ task_id: number; topic: string; subtopic: string; status: string; findings: string; sources: Array<{ title: string; url: string; snippet: string }>; execution_time_seconds: number }>;
-  }>("/api/execute-research", { tasks: planning.tasks }, workerSpan);
-  endSpan(workerSpan, { completed: execution.results.filter(r => r.status === "completed").length });
-  steps.push(toStep(workerSpan, "Worker Agent",
-    planning.tasks.map(t => `• ${t.search_query}`).join("\n"),
-    execution.results.map(r => `[${r.topic}] ${r.subtopic}: ${r.findings.slice(0, 120)}...\n  Sources: ${r.sources.length}`).join("\n\n"),
-    estimateTokens(JSON.stringify(execution))));
+    if (event.event_type === "node_end" && meta) {
+      const output = event.data?.output ?? {};
+      const error = event.data?.error;
+      const span = openSpans[event.node];
+      if (span) {
+        endSpan(span, { duration_ms: event.data?.duration_ms ?? 0, ...scalarAttributes(output), ...(error ? { error } : {}) });
+        lastSpanId = span.span_id;
+        const tokens = estimateTokens(JSON.stringify(output));
+        totalTokens += tokens;
+        steps.push({
+          agentId: span.span_id, agentName: meta.label,
+          prompt: JSON.stringify(event.data?.input ?? {}, null, 2),
+          output: JSON.stringify(output, null, 2),
+          durationMs: event.data?.duration_ms ?? 0, tokens,
+          traceId: span.trace_id, spanId: span.span_id, parentSpanId: span.parent_span_id,
+          pipelockRequestIds: span.pipelock_request_ids,
+        });
+      }
 
-  // Tool child spans
-  const completedTools = execution.results.slice(0, 8).map((result, i) => {
-    const task = planning.tasks.find(t => t.task_id === result.task_id);
-    const toolSpan = startSpan(trace, `web_search_${i + 1}`, workerSpan.span_id,
-      { transition_label: "search", query: task?.search_query || result.subtopic, domain: "api.tavily.com" });
-    endSpan(toolSpan, { sources: result.sources.length, duration_s: result.execution_time_seconds });
-    steps.push(toStep(toolSpan, `Web Search: ${result.subtopic}`,
-      task?.search_query || result.subtopic,
-      result.findings.slice(0, 400) + (result.findings.length > 400 ? "..." : ""),
-      estimateTokens(result.findings)));
-    const tool: ToolExecution = {
-      id: `task-${result.task_id}`, name: "Web Search Tool",
-      query: task?.search_query || result.subtopic,
-      status: result.status === "completed" || result.sources.length > 0 ? "completed" : "failed",
-      durationMs: Math.round(result.execution_time_seconds * 1000), sources: result.sources.length,
-    };
-    upsertTool(id, tool); return tool;
-  });
+      if (error) {
+        const current = getRun(id)!;
+        const failed = patchRun(id, {
+          status: "failed", currentTask: `${meta.label} failed`,
+          agents: setAgentStage(current.agents, meta.index, 100, true),
+        });
+        send({ type: "error", run: failed, log: log(event.node, "error", `${meta.label} failed: ${error}`), message: error });
+        return false; // wait for run_end for terminal bookkeeping
+      }
 
-  current = patchRun(id, { results: execution.results, steps, progress: 72,
-    currentTask: `${execution.results.filter(r => r.status === "completed").length}/${execution.results.length} tasks done`,
-    tools: completedTools, agents: setAgentStage(getRun(id)!.agents, 4, 30),
-    tokenUsage: tokenUsage(run.prompt, JSON.stringify(enhancedPrompt) + JSON.stringify(planning) + JSON.stringify(execution)) });
-  send({ type: "tool", run: current, tool: completedTools.at(-1),
-    log: appendLog(id, "web", "success", `[span:${workerSpan.span_id}] ${execution.results.reduce((s, r) => s + r.sources.length, 0)} sources`) });
+      applyNodeOutput(event.node, output);
 
-  // ── Formatter ────────────────────────────────────────────────────────────
-  const formatterSpan = startSpan(trace, "formatter_agent", workerSpan.span_id, { transition_label: "findings" });
-  emit({ progress: 84, currentTask: "Formatter composing report", agents: setAgentStage(getRun(id)!.agents, 4, 70) },
-    "formatter", `[trace:${trace.trace_id}][span:${formatterSpan.span_id}][parent:${formatterSpan.parent_span_id}] /api/format-report`);
+      const current = getRun(id)!;
+      const next = patchRun(id, {
+        progress: Math.max(current.progress, meta.endProgress),
+        steps: [...steps],
+        agents: setAgentStage(current.agents, Math.min(meta.index + 1, 4), meta.index === 4 ? 100 : 10),
+        tokenUsage: { prompt: estimateTokens(current.prompt), completion: totalTokens, total: estimateTokens(current.prompt) + totalTokens },
+      });
+      send({ type: "status", run: next, log: log(event.node, "success", nodeSummaryMessage(event.node, output)) });
+      return false;
+    }
 
-  const backendReport = await postBackendTraced<{
-    title: string; topics: string[]; introduction: string; sections: Record<string, string>;
-    comparative_analysis?: string | null; conclusion: string;
-    citations: Array<{ title: string; url: string; snippet: string }>;
-    generated_at: string; total_words: number;
-  }>("/api/format-report", { task_results: execution.results, enhanced_prompt: enhancedPrompt }, formatterSpan);
+    if (event.event_type === "run_end") {
+      await finalize(event.data?.status);
+      return true;
+    }
 
-  const report = mapBackendReport(id, backendReport);
-  endSpan(formatterSpan, { words: backendReport.total_words, citations: backendReport.citations.length });
-  steps.push(toStep(formatterSpan, "Formatter Agent",
-    `Format findings for: ${enhancedPrompt.topics.join(", ")}`,
-    `Title: ${backendReport.title}\nSections: ${Object.keys(backendReport.sections).join(", ")}\nWords: ${backendReport.total_words}\nCitations: ${backendReport.citations.length}`,
-    estimateTokens(JSON.stringify(backendReport))));
+    return false;
+  }
 
-  endSpan(rootSpan, { status: "completed" });
-  const { nodes: traceNodes, edges: traceEdges } = spansToGraph(trace.spans);
+  function applyNodeOutput(node: string, output: Record<string, any>) {
+    if (node === "prompt_enhancer" && output.topics) {
+      patchRun(id, { currentTask: `Topics: ${(output.topics as string[]).join(" vs ")}` });
+    }
+    if (node === "planner" && Array.isArray(output.tasks)) {
+      for (const task of output.tasks) {
+        const tool: ToolExecution = {
+          id: `task-${task.task_id}`, name: "Web Search Tool",
+          query: task.search_query, status: "queued", durationMs: 0, sources: 0,
+        };
+        upsertTool(id, tool);
+        send({ type: "tool", tool });
+      }
+    }
+    if (node === "worker" && Array.isArray(output.results)) {
+      for (const result of output.results) {
+        const tool: ToolExecution = {
+          id: `task-${result.task_id}`, name: "Web Search Tool",
+          query: result.search_query || result.subtopic,
+          status: result.status === "failed" ? "failed" : "completed",
+          durationMs: Math.round((result.seconds ?? 0) * 1000), sources: result.sources ?? 0,
+        };
+        upsertTool(id, tool);
+        send({ type: "tool", tool });
+      }
+    }
+    if (node === "critic") {
+      const verdict = output.verdict === "needs_more" ? "requested another research pass" : "approved coverage";
+      patchRun(id, { currentTask: `Critic ${verdict} (coverage ${(Number(output.coverage_score ?? 0) * 100).toFixed(0)}%)` });
+    }
+  }
 
-  current = patchRun(id, {
-    report, steps, traceId: trace.trace_id, traceSpans: trace.spans,
-    traceGraph: { nodes: traceNodes, edges: traceEdges },
-    status: "completed", progress: 100, currentTask: "Report ready", estimatedCompletion: "Complete",
-    agents: getRun(id)!.agents.map(a => ({ ...a, status: "completed", progress: 100 })),
-    tokenUsage: tokenUsage(run.prompt, JSON.stringify(backendReport)),
-  });
+  async function finalize(status?: string) {
+    endSpan(rootSpan, { status: status ?? "completed" });
+    const { nodes, edges } = spansToGraph(trace.spans);
 
-  send({ type: "complete", run: current, report,
-    log: appendLog(id, "formatter", "success", `[trace:${trace.trace_id}] Complete — ${trace.spans.length} spans`) });
+    const backendRun = await getBackend<{
+      status: string; error?: string | null;
+      report?: { report: any; file_path?: string } | null;
+    }>(`/api/research/${id}`);
+
+    if (backendRun?.status === "completed" && backendRun.report?.report) {
+      const report = mapBackendReport(id, backendRun.report.report);
+      report.filePath = backendRun.report.file_path;
+      const current = getRun(id)!;
+      const next = patchRun(id, {
+        report, steps: [...steps], traceId: id, traceSpans: trace.spans,
+        traceGraph: { nodes, edges },
+        status: "completed", progress: 100, currentTask: "Report ready", estimatedCompletion: "Complete",
+        agents: current.agents.map((a) => ({ ...a, status: "completed" as const, progress: 100 })),
+      });
+      send({ type: "complete", run: next, report, log: log("formatter", "success", `[trace:${id}] Complete — ${trace.spans.length} spans`) });
+      return;
+    }
+
+    const message = backendRun?.error || "Research run failed";
+    const next = patchRun(id, {
+      status: "failed", currentTask: "Pipeline failed", traceSpans: trace.spans, traceGraph: { nodes, edges },
+    });
+    send({ type: "error", run: next, log: log("system", "error", message), message });
+  }
 }
 
-function toStep(span: Span, name: string, prompt: string, output: string, tokens?: number): AgentStep {
-  return { agentId: span.span_id, agentName: name, prompt, output, durationMs: span.duration_ms || 0, tokens,
-    traceId: span.trace_id, spanId: span.span_id, parentSpanId: span.parent_span_id,
-    pipelockRequestIds: span.pipelock_request_ids };
+function scalarAttributes(output: Record<string, any>): Record<string, string | number> {
+  const attrs: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(output)) {
+    if (typeof value === "string" || typeof value === "number") attrs[key] = value;
+    if (Array.isArray(value) && value.every((v) => typeof v === "string")) attrs[key] = value.join(", ");
+  }
+  return attrs;
 }
 
-function tokenUsage(prompt: string, generated = "") {
-  const p = estimateTokens(prompt), c = estimateTokens(generated);
-  return { prompt: p, completion: c, total: p + c };
-}
-
-function activeAgentIndex(agents: AgentNode[]) {
-  const i = agents.findIndex(a => a.status === "running");
-  return i === -1 ? 0 : i;
+function nodeSummaryMessage(node: string, output: Record<string, any>): string {
+  switch (node) {
+    case "prompt_enhancer":
+      return `Topics: ${(output.topics ?? []).join(", ")} (depth: ${output.research_depth ?? "medium"})`;
+    case "planner":
+      return `${output.task_count ?? 0} research tasks planned${(output.iteration ?? 0) > 0 ? ` (gap-filling pass ${output.iteration})` : ""}`;
+    case "worker":
+      return `${output.completed ?? 0}/${output.total ?? 0} tasks completed`;
+    case "critic":
+      return `Verdict: ${output.verdict ?? "sufficient"} — coverage ${(Number(output.coverage_score ?? 0) * 100).toFixed(0)}%${(output.gaps ?? []).length ? `, gaps: ${(output.gaps as string[]).join("; ")}` : ""}`;
+    case "formatter":
+      return `Report ready — ${output.total_words ?? 0} words, ${output.citations ?? 0} citations`;
+    default:
+      return `${node} finished`;
+  }
 }

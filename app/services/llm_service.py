@@ -1,5 +1,6 @@
 """LLM service backed by Groq, with optional Pipelock proxy routing."""
 
+import contextvars
 import json
 import httpx
 from typing import Any, Optional, Dict
@@ -14,6 +15,31 @@ from app.config.settings import settings
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Per-run token accounting. The orchestrator seeds this contextvar at the
+# start of a pipeline; every LLM call inside that task tree (including
+# asyncio.gather children, which inherit the context) accumulates the real
+# usage numbers reported by the Groq API.
+_usage_ctx: contextvars.ContextVar[Optional[Dict[str, int]]] = contextvars.ContextVar(
+    "llm_usage", default=None
+)
+
+
+def start_usage_tracking() -> Dict[str, int]:
+    """Seed token accounting for the current task tree and return the dict."""
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "llm_calls": 0}
+    _usage_ctx.set(usage)
+    return usage
+
+
+def _record_usage(response) -> None:
+    usage = _usage_ctx.get()
+    if usage is None or getattr(response, "usage", None) is None:
+        return
+    usage["prompt_tokens"] += response.usage.prompt_tokens or 0
+    usage["completion_tokens"] += response.usage.completion_tokens or 0
+    usage["total_tokens"] += response.usage.total_tokens or 0
+    usage["llm_calls"] += 1
 
 
 class LLMService:
@@ -70,6 +96,7 @@ class LLMService:
                 kwargs["response_format"] = response_format
 
             response = await self.client.chat.completions.create(**kwargs)
+            _record_usage(response)
             result = response.choices[0].message.content
             logger.info(f"LLM response received ({len(result)} chars)")
             return result
@@ -107,10 +134,6 @@ class LLMService:
             user_prompt=f"Content to summarize:\n\n{content}",
             temperature=0.5,
         )
-
-    async def count_tokens(self, text: str) -> int:
-        return len(text) // 4
-
 
 _llm_service: Optional[LLMService] = None
 

@@ -34,9 +34,24 @@ async def lifespan(app: FastAPI):
             "Copy .env.example to .env and fill in your API keys."
         )
 
+    from app.services.run_store import get_run_store
+    from app.services.orchestration import get_orchestrator
+
+    await get_run_store().init()
+
+    # Crash recovery: resume any runs a previous process left in-flight
+    # (they continue from their last LangGraph checkpoint).
+    resumed = await get_orchestrator().resume_interrupted_runs()
+    if resumed:
+        logger.info(f"Scheduled {resumed} interrupted run(s) for resumption")
+
     yield
-    
+
     # Shutdown
+    from app.graph.graph import aclose_graph
+
+    await get_run_store().close()
+    await aclose_graph()
     logger.info(f"Shutting down {settings.app_name}")
 
 

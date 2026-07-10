@@ -4,7 +4,7 @@ export const agentTemplate: AgentNode[] = [
   { id: "prompt", name: "Prompt Enhancer", role: "Clarifies topics and scope", status: "idle", progress: 0 },
   { id: "planner", name: "Planner Agent", role: "Builds task graph", status: "idle", progress: 0 },
   { id: "worker", name: "Worker Agent", role: "Runs parallel research", status: "idle", progress: 0 },
-  { id: "web", name: "Web Search Tool", role: "Collects cited sources", status: "idle", progress: 0 },
+  { id: "critic", name: "Critic Agent", role: "Judges coverage, triggers replanning", status: "idle", progress: 0 },
   { id: "formatter", name: "Formatter Agent", role: "Composes final report", status: "idle", progress: 0 }
 ];
 

@@ -2,17 +2,23 @@
 LangGraph node functions.
 
 Each function is a thin wrapper around an existing agent class.
-The agents themselves are NOT modified — only the calling convention
-changes from direct method calls to LangGraph node signatures
-(receive state dict → return partial state update).
+Nodes receive the shared ResearchState plus the invocation config;
+the Pipelab tracker travels in config["configurable"]["tracker"]
+(NOT in state) so checkpointed state stays serializable.
 
 Node execution order (defined in graph.py):
-  prompt_enhancer  →  planner  →  worker  →  formatter
+
+  prompt_enhancer → planner → worker → critic ─┬→ formatter
+                       ▲                        │
+                       └── (gaps, iteration < max_iterations)
 """
+
+from langchain_core.runnables import RunnableConfig
 
 from app.agents.prompt_enhancer import get_prompt_clarifier
 from app.agents.planner import get_planner
 from app.agents.worker import get_worker
+from app.agents.critic import get_critic, VERDICT_NEEDS_MORE
 from app.agents.formatter import get_formatter
 from app.tools.file_writer import get_file_writer
 from app.graph.state import ResearchState
@@ -21,19 +27,26 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+DEFAULT_MAX_ITERATIONS = 2
+
+
+def _tracker_from_config(config: RunnableConfig) -> PipelabTracker:
+    tracker = (config.get("configurable") or {}).get("tracker")
+    return tracker if tracker is not None else PipelabTracker(run_id="untracked")
+
 
 # --------------------------------------------------------------------------- #
 # Node 1 — Prompt Enhancer                                                    #
 # --------------------------------------------------------------------------- #
 
-async def prompt_enhancer_node(state: ResearchState) -> ResearchState:
+async def prompt_enhancer_node(state: ResearchState, config: RunnableConfig) -> ResearchState:
     """
-    Node 1: Clarify and enrich the raw user prompt.
+    Clarify and enrich the raw user prompt.
 
-    Reads:   state["user_prompt"]
-    Writes:  state["enhanced_prompt"]
+    Reads:   user_prompt
+    Writes:  enhanced_prompt
     """
-    tracker: PipelabTracker = state["_tracker"]  # injected by orchestrator
+    tracker = _tracker_from_config(config)
     user_prompt = state["user_prompt"]
 
     start_ts = tracker.emit_node_start(
@@ -65,35 +78,64 @@ async def prompt_enhancer_node(state: ResearchState) -> ResearchState:
 # Node 2 — Planner                                                            #
 # --------------------------------------------------------------------------- #
 
-async def planner_node(state: ResearchState) -> ResearchState:
+async def planner_node(state: ResearchState, config: RunnableConfig) -> ResearchState:
     """
-    Node 2: Break the enhanced prompt into a list of search tasks.
+    Break the enhanced prompt into a batch of search tasks.
 
-    Reads:   state["enhanced_prompt"]
-    Writes:  state["tasks"]
+    On the first pass this plans the full research. When the critic sent
+    us back with gaps, it plans only incremental gap-filling tasks.
+
+    Reads:   enhanced_prompt, gaps, all_tasks
+    Writes:  tasks (current batch), all_tasks (accumulated)
     """
-    tracker: PipelabTracker = state["_tracker"]
+    tracker = _tracker_from_config(config)
     enhanced_prompt = state["enhanced_prompt"]
+    gaps = state.get("gaps") or []
+    all_tasks = state.get("all_tasks") or []
+    iteration = state.get("iteration", 0)
 
     start_ts = tracker.emit_node_start(
         "planner",
         input_summary={
             "topics": enhanced_prompt.topics,
             "depth": enhanced_prompt.research_depth,
+            "gaps": gaps,
+            "iteration": iteration,
         },
     )
 
     try:
         agent = get_planner()
-        tasks = await agent.create_plan(enhanced_prompt)
+        if gaps and all_tasks:
+            batch = await agent.create_plan(enhanced_prompt, gaps=gaps, existing_tasks=all_tasks)
+        else:
+            batch = await agent.create_plan(enhanced_prompt)
 
         tracker.emit_node_end(
             "planner",
             start_ts,
-            output_summary={"task_count": len(tasks)},
+            output_summary={
+                "task_count": len(batch),
+                "iteration": iteration,
+                "tasks": [
+                    {
+                        "task_id": t.task_id,
+                        "topic": t.topic,
+                        "subtopic": t.subtopic,
+                        "search_query": t.search_query,
+                        "description": t.description,
+                    }
+                    for t in batch[:10]
+                ],
+            },
         )
-        logger.info(f"[Graph] planner → {len(tasks)} tasks")
-        return {"tasks": tasks}
+        logger.info(f"[Graph] planner → {len(batch)} tasks (iteration {iteration})")
+        return {
+            "tasks": batch,
+            "all_tasks": all_tasks + batch,
+            # Consume the gaps so a future pass doesn't re-plan them.
+            "gaps": [],
+        }
 
     except Exception as exc:
         tracker.emit_node_end("planner", start_ts, error=str(exc))
@@ -104,27 +146,31 @@ async def planner_node(state: ResearchState) -> ResearchState:
 # Node 3 — Worker                                                             #
 # --------------------------------------------------------------------------- #
 
-async def worker_node(state: ResearchState) -> ResearchState:
+async def worker_node(state: ResearchState, config: RunnableConfig) -> ResearchState:
     """
-    Node 3: Execute all tasks concurrently via web search + LLM summarisation.
+    Execute the current task batch concurrently via web search + LLM
+    summarisation, accumulating results across iterations.
 
-    Reads:   state["tasks"]
-    Writes:  state["task_results"]
+    Reads:   tasks, task_results
+    Writes:  task_results (accumulated)
     """
-    tracker: PipelabTracker = state["_tracker"]
-    tasks = state["tasks"]
+    tracker = _tracker_from_config(config)
+    tasks = state.get("tasks") or []
+    previous_results = state.get("task_results") or []
+    iteration = state.get("iteration", 0)
 
     start_ts = tracker.emit_node_start(
         "worker",
-        input_summary={"task_count": len(tasks)},
+        input_summary={"task_count": len(tasks), "iteration": iteration},
     )
 
     try:
         agent = get_worker()
-        results = await agent.execute_tasks(tasks)
+        results = await agent.execute_tasks(tasks) if tasks else []
 
         completed = sum(1 for r in results if r.status == "completed")
         failed = sum(1 for r in results if r.status == "failed")
+        queries = {t.task_id: t.search_query for t in tasks}
 
         tracker.emit_node_end(
             "worker",
@@ -133,10 +179,24 @@ async def worker_node(state: ResearchState) -> ResearchState:
                 "total": len(results),
                 "completed": completed,
                 "failed": failed,
+                "iteration": iteration,
+                "results": [
+                    {
+                        "task_id": r.task_id,
+                        "topic": r.topic,
+                        "subtopic": r.subtopic,
+                        "search_query": queries.get(r.task_id, ""),
+                        "status": r.status,
+                        "sources": len(r.sources),
+                        "seconds": round(r.execution_time_seconds, 2),
+                        "findings_preview": r.findings[:200],
+                    }
+                    for r in results[:10]
+                ],
             },
         )
-        logger.info(f"[Graph] worker → {completed}/{len(results)} tasks completed")
-        return {"task_results": results}
+        logger.info(f"[Graph] worker → {completed}/{len(results)} tasks completed (iteration {iteration})")
+        return {"task_results": previous_results + results}
 
     except Exception as exc:
         tracker.emit_node_end("worker", start_ts, error=str(exc))
@@ -144,18 +204,82 @@ async def worker_node(state: ResearchState) -> ResearchState:
 
 
 # --------------------------------------------------------------------------- #
-# Node 4 — Formatter                                                          #
+# Node 4 — Critic                                                             #
 # --------------------------------------------------------------------------- #
 
-async def formatter_node(state: ResearchState) -> ResearchState:
+async def critic_node(state: ResearchState, config: RunnableConfig) -> ResearchState:
     """
-    Node 4: Synthesise task results into a structured report and save to .txt.
+    Judge coverage of the accumulated results and decide whether another
+    planning pass is worth it.
 
-    Reads:   state["task_results"], state["enhanced_prompt"]
-    Writes:  state["report"], state["file_path"]
+    Reads:   enhanced_prompt, task_results, iteration, max_iterations
+    Writes:  coverage_score, gaps, verdict, iteration
     """
-    tracker: PipelabTracker = state["_tracker"]
-    task_results = state["task_results"]
+    tracker = _tracker_from_config(config)
+    enhanced_prompt = state["enhanced_prompt"]
+    task_results = state.get("task_results") or []
+    iteration = state.get("iteration", 0) + 1
+    max_iterations = state.get("max_iterations", DEFAULT_MAX_ITERATIONS)
+
+    start_ts = tracker.emit_node_start(
+        "critic",
+        input_summary={"result_count": len(task_results), "iteration": iteration},
+    )
+
+    try:
+        agent = get_critic()
+        evaluation = await agent.evaluate(enhanced_prompt, task_results)
+
+        verdict = evaluation["verdict"]
+        if verdict == VERDICT_NEEDS_MORE and iteration >= max_iterations:
+            logger.info(f"[Graph] critic wanted more research but iteration cap ({max_iterations}) reached")
+            verdict = "sufficient"
+
+        tracker.emit_node_end(
+            "critic",
+            start_ts,
+            output_summary={
+                "coverage_score": evaluation["coverage_score"],
+                "gaps": evaluation["gaps"],
+                "verdict": verdict,
+                "iteration": iteration,
+            },
+        )
+        logger.info(
+            f"[Graph] critic → {verdict} (coverage={evaluation['coverage_score']:.2f}, iteration {iteration})"
+        )
+        return {
+            "coverage_score": evaluation["coverage_score"],
+            "gaps": evaluation["gaps"] if verdict == VERDICT_NEEDS_MORE else [],
+            "verdict": verdict,
+            "iteration": iteration,
+        }
+
+    except Exception as exc:
+        tracker.emit_node_end("critic", start_ts, error=str(exc))
+        raise
+
+
+def route_after_critic(state: ResearchState) -> str:
+    """Conditional edge: replan when the critic found actionable gaps."""
+    if state.get("verdict") == VERDICT_NEEDS_MORE and state.get("gaps"):
+        return "planner"
+    return "formatter"
+
+
+# --------------------------------------------------------------------------- #
+# Node 5 — Formatter                                                          #
+# --------------------------------------------------------------------------- #
+
+async def formatter_node(state: ResearchState, config: RunnableConfig) -> ResearchState:
+    """
+    Synthesise all accumulated results into a structured report and save it.
+
+    Reads:   task_results, enhanced_prompt
+    Writes:  report, file_path
+    """
+    tracker = _tracker_from_config(config)
+    task_results = state.get("task_results") or []
     enhanced_prompt = state["enhanced_prompt"]
 
     start_ts = tracker.emit_node_start(
