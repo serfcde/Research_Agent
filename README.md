@@ -94,6 +94,14 @@ npm run dev                 # http://localhost:3000
 docker compose up --build
 ```
 
+### Monitoring (optional: Prometheus + Grafana)
+
+```bash
+docker compose --profile monitoring up --build
+```
+
+The backend exposes Prometheus metrics on `/metrics` (runs by outcome, per-node latency histograms, replan rate, token/cost counters, active runs, SSE subscribers). The profile adds Prometheus (`:9090`) and a pre-provisioned Grafana dashboard (`:3001`, anonymous view enabled). Three observability planes, each with a job: **traces** debug one run, **metrics** watch aggregate health, **evals** track answer quality.
+
 ### Try it
 
 ```bash

@@ -7,10 +7,11 @@ dashboard can reconstruct the full execution graph:
   run_start → (node_start → node_end)* → run_end
 
 Each event is:
-  1. appended to logs/pipelab_trace.jsonl (durable trace), and
+  1. appended to logs/pipelab_trace.jsonl (durable trace),
   2. published to any in-process SSE subscribers for this run
      (see subscribe()/unsubscribe()), enabling live streaming of
-     node transitions to the frontend.
+     node transitions to the frontend, and
+  3. recorded as Prometheus metrics (app/utils/metrics.py).
 """
 
 import asyncio
@@ -20,6 +21,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from app.utils import metrics
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,14 +40,16 @@ def subscribe(run_id: str) -> asyncio.Queue:
     """Register a queue that receives every event emitted for run_id."""
     queue: asyncio.Queue = asyncio.Queue()
     _subscribers.setdefault(run_id, set()).add(queue)
+    metrics.SSE_SUBSCRIBERS.inc()
     return queue
 
 
 def unsubscribe(run_id: str, queue: asyncio.Queue) -> None:
     """Remove a subscriber queue for run_id."""
     queues = _subscribers.get(run_id)
-    if queues is not None:
+    if queues is not None and queue in queues:
         queues.discard(queue)
+        metrics.SSE_SUBSCRIBERS.dec()
         if not queues:
             _subscribers.pop(run_id, None)
 
@@ -117,6 +121,7 @@ class PipelabTracker:
     # ------------------------------------------------------------------ #
 
     def emit_run_start(self, user_prompt: str) -> None:
+        metrics.record_run_start()
         self._emit(
             event_type="run_start",
             node="orchestrator",
@@ -144,6 +149,7 @@ class PipelabTracker:
     ) -> None:
         """Emit a node_end event with duration and optional output summary."""
         duration_ms = round((time.time() - start_ts) * 1000, 1)
+        metrics.record_node_end(node, duration_ms, error is not None, output_summary)
         self._emit(
             event_type="node_end",
             node=node,
@@ -162,6 +168,7 @@ class PipelabTracker:
         status: str = "completed",
         usage: dict | None = None,
     ) -> None:
+        metrics.record_run_end(total_seconds, status, usage)
         self._emit(
             event_type="run_end",
             node="orchestrator",

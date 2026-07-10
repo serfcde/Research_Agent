@@ -128,8 +128,28 @@ class TestAggregate:
         ]
         summary = aggregate(results)
         assert summary["runs"] == 2
+        assert summary["degraded_runs"] == 0
         assert summary["grounding_mean"] == 0.7
         assert summary["coverage_mean"] == 0.8
         assert summary["latency_p50_s"] == 10.0
         assert summary["latency_p95_s"] == 30.0
         assert summary["replan_rate"] == 0.5
+
+    def test_degraded_runs_excluded_from_quality_means(self):
+        """A quota-starved run (zero LLM calls) must not drag down the aggregate."""
+        results = [
+            {
+                "grounding": {"score": 0.8}, "coverage": {"score": 0.9}, "structure": {"score": 1.0},
+                "ops": {"total_seconds": 10.0, "cost_usd": 0.01, "iterations": 1, "fallback_rate": 0.0},
+            },
+            {
+                "degraded": True,
+                "grounding": {"score": 0.0}, "coverage": {"score": 0.0}, "structure": {"score": 0.3},
+                "ops": {"total_seconds": 5.0, "cost_usd": 0.0, "iterations": 0, "fallback_rate": 1.0},
+            },
+        ]
+        summary = aggregate(results)
+        assert summary["runs"] == 2
+        assert summary["degraded_runs"] == 1
+        assert summary["grounding_mean"] == 0.8
+        assert summary["coverage_mean"] == 0.9
