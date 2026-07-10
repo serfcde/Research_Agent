@@ -1,7 +1,9 @@
 """Structured logging configuration."""
 
 import sys
+
 from loguru import logger as _logger
+
 from app.config.settings import settings
 
 # Remove default handler

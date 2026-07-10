@@ -34,20 +34,19 @@ When settings.database_url is set, graph state is checkpointed to
 Postgres (thread_id = run_id) so runs survive process restarts.
 """
 
-from typing import Optional
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 
 from app.config.settings import settings
-from app.graph.state import ResearchState
 from app.graph.nodes import (
-    prompt_enhancer_node,
-    planner_node,
-    worker_node,
     critic_node,
     formatter_node,
+    planner_node,
+    prompt_enhancer_node,
     route_after_critic,
+    worker_node,
 )
+from app.graph.state import ResearchState
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -81,7 +80,7 @@ def build_graph_builder() -> StateGraph:
 # configured, the checkpointer context manager kept open for the app's
 # lifetime (closed via aclose_graph on shutdown).
 _graph = None
-_checkpointer_cm: Optional[object] = None
+_checkpointer_cm: object | None = None
 
 
 async def get_research_graph():

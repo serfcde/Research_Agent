@@ -2,8 +2,9 @@
 
 import json
 import re
-from app.services.llm_service import get_llm_service
+
 from app.models.schemas import EnhancedPrompt
+from app.services.llm_service import get_llm_service
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -107,7 +108,7 @@ Respond with ONLY a JSON object (no markdown, no explanation)."""
                 if start != -1 and end > start:
                     parsed = json.loads(response_text[start:end])
                 else:
-                    raise ValueError("Could not parse LLM response as JSON")
+                    raise ValueError("Could not parse LLM response as JSON") from None
 
             topics = self._normalize_topics(parsed.get("topics", []), user_prompt)
 

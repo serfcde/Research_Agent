@@ -2,15 +2,17 @@
 
 import contextvars
 import json
+from typing import Any
+
 import httpx
-from typing import Any, Optional, Dict
 from groq import AsyncGroq
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
 )
+
 from app.config.settings import settings
 from app.utils.logger import get_logger
 
@@ -20,12 +22,12 @@ logger = get_logger(__name__)
 # start of a pipeline; every LLM call inside that task tree (including
 # asyncio.gather children, which inherit the context) accumulates the real
 # usage numbers reported by the Groq API.
-_usage_ctx: contextvars.ContextVar[Optional[Dict[str, int]]] = contextvars.ContextVar(
+_usage_ctx: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar(
     "llm_usage", default=None
 )
 
 
-def start_usage_tracking() -> Dict[str, int]:
+def start_usage_tracking() -> dict[str, int]:
     """Seed token accounting for the current task tree and return the dict."""
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "llm_calls": 0}
     _usage_ctx.set(usage)
@@ -46,7 +48,7 @@ class LLMService:
     """Service for interacting with the Groq LLM."""
 
     def __init__(self):
-        client_kwargs: Dict[str, Any] = {"api_key": settings.groq_api_key}
+        client_kwargs: dict[str, Any] = {"api_key": settings.groq_api_key}
 
         if settings.pipelock_proxy_url:
             # Route Groq traffic through the Pipelock forward proxy for
@@ -76,7 +78,7 @@ class LLMService:
         self,
         system_prompt: str,
         user_prompt: str,
-        response_format: Optional[Dict[str, Any]] = None,
+        response_format: dict[str, Any] | None = None,
         temperature: float = 0.7,
     ) -> str:
         try:
@@ -110,7 +112,7 @@ class LLMService:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.7,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         response_format = {"type": "json_object"}
         response_text = await self.call_llm(
             system_prompt=system_prompt,
@@ -135,7 +137,7 @@ class LLMService:
             temperature=0.5,
         )
 
-_llm_service: Optional[LLMService] = None
+_llm_service: LLMService | None = None
 
 
 def get_llm_service() -> LLMService:

@@ -9,21 +9,21 @@ from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from app.agents.formatter import get_formatter
+from app.agents.planner import get_planner
+from app.agents.prompt_enhancer import get_prompt_clarifier
+from app.agents.worker import get_worker
+from app.graph import tracker as tracker_bus
+from app.graph.tracker import PipelabTracker
 from app.models.schemas import (
-    PromptEnhancementRequest,
-    PlanningRequest,
     ExecutionRequest,
     FormattingRequest,
     FullResearchRequest,
+    PlanningRequest,
+    PromptEnhancementRequest,
 )
-from app.agents.prompt_enhancer import get_prompt_clarifier
-from app.agents.planner import get_planner
-from app.agents.worker import get_worker
-from app.agents.formatter import get_formatter
 from app.services.orchestration import get_orchestrator
 from app.services.run_store import get_run_store
-from app.graph import tracker as tracker_bus
-from app.graph.tracker import PipelabTracker
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -140,7 +140,7 @@ async def stream_research_events(run_id: str, http_request: Request):
                     return
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": heartbeat\n\n"
                     continue
                 if event.get("event_type") == "__stream_end__":

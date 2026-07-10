@@ -22,8 +22,8 @@ Schema (created on startup, idempotent):
 """
 
 import json
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from app.config.settings import settings
 from app.utils.logger import get_logger
@@ -39,7 +39,7 @@ class InMemoryRunStore:
     """Dict-backed run store for local dev and tests (not durable)."""
 
     def __init__(self):
-        self._runs: Dict[str, Dict[str, Any]] = {}
+        self._runs: dict[str, dict[str, Any]] = {}
 
     async def init(self) -> None:
         pass
@@ -52,18 +52,18 @@ class InMemoryRunStore:
             "id": run_id,
             "prompt": prompt,
             "status": RUN_RUNNING,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "finished_at": None,
             "report": None,
             "error": None,
         }
 
-    async def mark_completed(self, run_id: str, report: Dict[str, Any]) -> None:
+    async def mark_completed(self, run_id: str, report: dict[str, Any]) -> None:
         run = self._runs.get(run_id)
         if run:
             run.update(
                 status=RUN_COMPLETED,
-                finished_at=datetime.now(timezone.utc).isoformat(),
+                finished_at=datetime.now(UTC).isoformat(),
                 report=report,
             )
 
@@ -72,14 +72,14 @@ class InMemoryRunStore:
         if run:
             run.update(
                 status=RUN_FAILED,
-                finished_at=datetime.now(timezone.utc).isoformat(),
+                finished_at=datetime.now(UTC).isoformat(),
                 error=error,
             )
 
-    async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+    async def get_run(self, run_id: str) -> dict[str, Any] | None:
         return self._runs.get(run_id)
 
-    async def list_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
+    async def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
         runs = sorted(self._runs.values(), key=lambda r: r["created_at"], reverse=True)
         return [{k: v for k, v in r.items() if k != "report"} for r in runs[:limit]]
 
@@ -136,24 +136,24 @@ class PostgresRunStore:
         async with self._pool.connection() as conn:
             await conn.execute(
                 "INSERT INTO runs (id, prompt, status, created_at) VALUES (%s, %s, %s, %s)",
-                (run_id, prompt, RUN_RUNNING, datetime.now(timezone.utc)),
+                (run_id, prompt, RUN_RUNNING, datetime.now(UTC)),
             )
 
-    async def mark_completed(self, run_id: str, report: Dict[str, Any]) -> None:
+    async def mark_completed(self, run_id: str, report: dict[str, Any]) -> None:
         async with self._pool.connection() as conn:
             await conn.execute(
                 "UPDATE runs SET status = %s, finished_at = %s, report_json = %s WHERE id = %s",
-                (RUN_COMPLETED, datetime.now(timezone.utc), json.dumps(report), run_id),
+                (RUN_COMPLETED, datetime.now(UTC), json.dumps(report), run_id),
             )
 
     async def mark_failed(self, run_id: str, error: str) -> None:
         async with self._pool.connection() as conn:
             await conn.execute(
                 "UPDATE runs SET status = %s, finished_at = %s, error = %s WHERE id = %s",
-                (RUN_FAILED, datetime.now(timezone.utc), error[:2000], run_id),
+                (RUN_FAILED, datetime.now(UTC), error[:2000], run_id),
             )
 
-    async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+    async def get_run(self, run_id: str) -> dict[str, Any] | None:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT id, prompt, status, created_at, finished_at, report_json, error "
@@ -165,7 +165,7 @@ class PostgresRunStore:
             return None
         return self._row_to_dict(row, include_report=True)
 
-    async def list_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
+    async def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT id, prompt, status, created_at, finished_at, NULL, error "
@@ -176,7 +176,7 @@ class PostgresRunStore:
         return [self._row_to_dict(row, include_report=False) for row in rows]
 
     @staticmethod
-    def _row_to_dict(row, include_report: bool) -> Dict[str, Any]:
+    def _row_to_dict(row, include_report: bool) -> dict[str, Any]:
         run = {
             "id": row[0],
             "prompt": row[1],

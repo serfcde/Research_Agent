@@ -1,9 +1,13 @@
 """Pytest configuration and fixtures."""
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.main import create_app
 from app.models.schemas import ResearchSource
-from fastapi.testclient import TestClient
+
+# Expose shared fixtures (mock_llm_service, mock_task_results, ...)
+pytest_plugins = ["tests.fixtures"]
 
 
 @pytest.fixture(autouse=True)

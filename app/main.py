@@ -2,16 +2,17 @@
 
 import time
 from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
-from app.config.settings import settings
-from app.utils.logger import get_logger
+
 from app.api.deps import require_api_key
 from app.api.routes import limiter, router
+from app.config.settings import settings
+from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -39,8 +40,8 @@ async def lifespan(app: FastAPI):
             "Copy .env.example to .env and fill in your API keys."
         )
 
-    from app.services.run_store import get_run_store
     from app.services.orchestration import get_orchestrator
+    from app.services.run_store import get_run_store
 
     await get_run_store().init()
 

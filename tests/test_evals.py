@@ -1,6 +1,5 @@
 """Tests for the evaluation harness (LLM judges mocked)."""
 
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest

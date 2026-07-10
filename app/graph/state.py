@@ -10,14 +10,14 @@ checkpointer between node transitions. Non-serializable helpers (the
 Pipelab tracker) travel in the invocation config instead.
 """
 
-from typing import List, Optional
+
 from typing_extensions import TypedDict
 
 from app.models.schemas import (
     EnhancedPrompt,
+    ResearchReport,
     ResearchTask,
     TaskResult,
-    ResearchReport,
 )
 
 
@@ -38,25 +38,25 @@ class ResearchState(TypedDict, total=False):
     user_prompt: str
 
     # Set by prompt_enhancer node
-    enhanced_prompt: Optional[EnhancedPrompt]
+    enhanced_prompt: EnhancedPrompt | None
 
     # Set by planner node — the batch of tasks for the next worker pass.
     # On replanning iterations this holds only the new gap-filling tasks.
-    tasks: Optional[List[ResearchTask]]
+    tasks: list[ResearchTask] | None
 
     # All tasks planned so far, across iterations
-    all_tasks: List[ResearchTask]
+    all_tasks: list[ResearchTask]
 
     # Set by worker node — accumulated results across iterations
-    task_results: List[TaskResult]
+    task_results: list[TaskResult]
 
     # Set by critic node
     coverage_score: float
-    gaps: List[str]
+    gaps: list[str]
     verdict: str
     iteration: int
     max_iterations: int
 
     # Set by formatter node
-    report: Optional[ResearchReport]
-    file_path: Optional[str]
+    report: ResearchReport | None
+    file_path: str | None

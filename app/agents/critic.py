@@ -1,9 +1,8 @@
 """Critic Agent - Judge research coverage and decide whether to replan."""
 
-from typing import List
 
-from app.services.llm_service import get_llm_service
 from app.models.schemas import EnhancedPrompt, TaskResult
+from app.services.llm_service import get_llm_service
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,7 +24,7 @@ class CriticAgent:
     async def evaluate(
         self,
         enhanced_prompt: EnhancedPrompt,
-        task_results: List[TaskResult],
+        task_results: list[TaskResult],
     ) -> dict:
         """
         Evaluate research coverage.

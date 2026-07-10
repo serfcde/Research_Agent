@@ -14,7 +14,6 @@ All LLM calls go through the existing LLMService at temperature 0.
 """
 
 import re
-from typing import Dict, List
 
 from app.models.schemas import ResearchReport
 from app.services.llm_service import get_llm_service
@@ -22,7 +21,7 @@ from app.services.llm_service import get_llm_service
 MAX_CLAIMS_JUDGED = 8
 
 
-def extract_claims(report: ResearchReport, max_claims: int = MAX_CLAIMS_JUDGED) -> List[str]:
+def extract_claims(report: ResearchReport, max_claims: int = MAX_CLAIMS_JUDGED) -> list[str]:
     """Sample declarative sentences from the report body to grounding-check."""
     body = " ".join(report.sections.values())
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", body)]
@@ -35,7 +34,7 @@ def extract_claims(report: ResearchReport, max_claims: int = MAX_CLAIMS_JUDGED) 
     return claims
 
 
-async def judge_grounding(report: ResearchReport) -> Dict:
+async def judge_grounding(report: ResearchReport) -> dict:
     """
     Fraction of sampled claims supported by the report's cited snippets.
 
@@ -83,7 +82,7 @@ async def judge_grounding(report: ResearchReport) -> Dict:
     }
 
 
-async def judge_coverage(prompt: str, report: ResearchReport) -> Dict:
+async def judge_coverage(prompt: str, report: ResearchReport) -> dict:
     """
     LLM-judged completeness of the report against the original prompt.
 
@@ -115,7 +114,7 @@ async def judge_coverage(prompt: str, report: ResearchReport) -> Dict:
     return {"score": round(score, 3), "missing": missing}
 
 
-def check_structure(report: ResearchReport, expected_topics: int) -> Dict:
+def check_structure(report: ResearchReport, expected_topics: int) -> dict:
     """
     Deterministic structural checks — no LLM involved.
 

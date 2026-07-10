@@ -18,7 +18,7 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any
 
 from app.utils.logger import get_logger
 
@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 _TRACE_PATH = Path("logs/pipelab_trace.jsonl")
 
 # In-process event bus: run_id → set of subscriber queues.
-_subscribers: Dict[str, Set[asyncio.Queue]] = {}
+_subscribers: dict[str, set[asyncio.Queue]] = {}
 
 # Sentinel queued after run_end so subscribers know the stream is over.
 STREAM_END = {"event_type": "__stream_end__"}
@@ -110,7 +110,7 @@ class PipelabTracker:
 
     def __init__(self, run_id: str):
         self.run_id = run_id
-        self.current_span_id: Optional[str] = None
+        self.current_span_id: str | None = None
 
     # ------------------------------------------------------------------ #
     # Public helpers                                                      #
@@ -123,7 +123,7 @@ class PipelabTracker:
             data={"user_prompt": user_prompt[:200]},
         )
 
-    def emit_node_start(self, node: str, input_summary: Optional[dict] = None) -> float:
+    def emit_node_start(self, node: str, input_summary: dict | None = None) -> float:
         """Emit a node_start event and return the start timestamp."""
         start_ts = time.time()
         self._emit(
@@ -139,8 +139,8 @@ class PipelabTracker:
         self,
         node: str,
         start_ts: float,
-        output_summary: Optional[dict] = None,
-        error: Optional[str] = None,
+        output_summary: dict | None = None,
+        error: str | None = None,
     ) -> None:
         """Emit a node_end event with duration and optional output summary."""
         duration_ms = round((time.time() - start_ts) * 1000, 1)
@@ -160,7 +160,7 @@ class PipelabTracker:
         self,
         total_seconds: float,
         status: str = "completed",
-        usage: Optional[dict] = None,
+        usage: dict | None = None,
     ) -> None:
         self._emit(
             event_type="run_end",
@@ -182,7 +182,7 @@ class PipelabTracker:
         event_type: str,
         node: str,
         data: Any = None,
-        ts: Optional[float] = None,
+        ts: float | None = None,
     ) -> None:
         event = {
             "run_id": self.run_id,

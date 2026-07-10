@@ -1,13 +1,15 @@
 """Test fixtures and utilities."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
 from app.models.schemas import (
     EnhancedPrompt,
+    ResearchReport,
+    ResearchSource,
     ResearchTask,
     TaskResult,
-    ResearchSource,
-    ResearchReport,
 )
 
 

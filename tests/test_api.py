@@ -1,6 +1,5 @@
 """Tests for API endpoints."""
 
-import pytest
 from fastapi.testclient import TestClient
 
 
@@ -64,7 +63,7 @@ class TestPlanningEndpoint:
         data = response.json()
         assert "tasks" in data
         assert len(data["tasks"]) > 0
-        
+
         # Verify task structure
         task = data["tasks"][0]
         assert "task_id" in task
@@ -101,7 +100,7 @@ class TestFormattingEndpoint:
             "sources": [],
             "execution_time_seconds": 10.5,
         }
-        
+
         response = client.post(
             "/api/format-report",
             json={

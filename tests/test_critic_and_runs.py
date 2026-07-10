@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.agents.critic import CriticAgent, VERDICT_NEEDS_MORE, VERDICT_SUFFICIENT
+from app.agents.critic import VERDICT_NEEDS_MORE, VERDICT_SUFFICIENT, CriticAgent
 from app.agents.planner import PlannerAgent
 from app.config.settings import settings
 from app.graph.nodes import critic_node, route_after_critic

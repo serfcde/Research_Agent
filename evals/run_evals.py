@@ -21,7 +21,7 @@ import json
 import statistics
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.graph.tracker import read_run_events
@@ -208,7 +208,7 @@ async def main() -> int:
     print_summary(results, summary)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     payload = {"timestamp": stamp, "summary": summary, "results": results}
     out_path = RESULTS_DIR / f"{stamp}.json"
     out_path.write_text(json.dumps(payload, indent=2))

@@ -15,14 +15,14 @@ Node execution order (defined in graph.py):
 
 from langchain_core.runnables import RunnableConfig
 
-from app.agents.prompt_enhancer import get_prompt_clarifier
-from app.agents.planner import get_planner
-from app.agents.worker import get_worker
-from app.agents.critic import get_critic, VERDICT_NEEDS_MORE
+from app.agents.critic import VERDICT_NEEDS_MORE, get_critic
 from app.agents.formatter import get_formatter
-from app.tools.file_writer import get_file_writer
+from app.agents.planner import get_planner
+from app.agents.prompt_enhancer import get_prompt_clarifier
+from app.agents.worker import get_worker
 from app.graph.state import ResearchState
 from app.graph.tracker import PipelabTracker
+from app.tools.file_writer import get_file_writer
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

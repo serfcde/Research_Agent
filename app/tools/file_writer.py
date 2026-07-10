@@ -1,8 +1,8 @@
 """File writer tool for exporting research reports."""
 
-from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+
 from app.config.settings import settings
 from app.utils.logger import get_logger
 
@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 class FileWriter:
     """Tool for writing research reports to files."""
 
-    def __init__(self, output_dir: Optional[Path] = None):
+    def __init__(self, output_dir: Path | None = None):
         """
         Initialize file writer.
 
@@ -57,7 +57,7 @@ class FileWriter:
             with open(file_path, "w", encoding="utf-8") as f:
                 # Add header
                 f.write("=" * 80 + "\n")
-                f.write(f"RESEARCH REPORT\n")
+                f.write("RESEARCH REPORT\n")
                 f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Topic: {topic}\n")
                 f.write("=" * 80 + "\n\n")
@@ -94,7 +94,7 @@ class FileWriter:
             file_path = self.output_dir / filename
 
             with open(file_path, "w", encoding="utf-8") as f:
-                f.write(f"# Research Report\n\n")
+                f.write("# Research Report\n\n")
                 f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"**Topic:** {topic}\n\n")
                 f.write("---\n\n")
@@ -136,10 +136,10 @@ class FileWriter:
 
 
 # Singleton instance
-_file_writer: Optional[FileWriter] = None
+_file_writer: FileWriter | None = None
 
 
-def get_file_writer(output_dir: Optional[Path] = None) -> FileWriter:
+def get_file_writer(output_dir: Path | None = None) -> FileWriter:
     """Get file writer singleton."""
     global _file_writer
     if _file_writer is None:

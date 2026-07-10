@@ -1,9 +1,9 @@
 """Planner Agent - Create research execution plans."""
 
 import json
-from typing import List, Optional
-from app.services.llm_service import get_llm_service
+
 from app.models.schemas import EnhancedPrompt, ResearchTask
+from app.services.llm_service import get_llm_service
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,9 +20,9 @@ class PlannerAgent:
     async def create_plan(
         self,
         enhanced_prompt: EnhancedPrompt,
-        gaps: Optional[List[str]] = None,
-        existing_tasks: Optional[List[ResearchTask]] = None,
-    ) -> List[ResearchTask]:
+        gaps: list[str] | None = None,
+        existing_tasks: list[ResearchTask] | None = None,
+    ) -> list[ResearchTask]:
         """
         Create research plan from enhanced prompt.
 
@@ -115,9 +115,9 @@ Generate specific research tasks with search queries. For each topic, create tas
     async def _create_gap_plan(
         self,
         enhanced_prompt: EnhancedPrompt,
-        gaps: List[str],
-        existing_tasks: List[ResearchTask],
-    ) -> List[ResearchTask]:
+        gaps: list[str],
+        existing_tasks: list[ResearchTask],
+    ) -> list[ResearchTask]:
         """Create incremental tasks that target specific coverage gaps."""
         logger.info(f"Replanning for {len(gaps)} coverage gaps")
 
@@ -151,7 +151,7 @@ Searches already performed (do not repeat):
                 start = response_text.find("[")
                 end = response_text.rfind("]") + 1
                 if start == -1 or end <= start:
-                    raise ValueError("Could not parse gap plan as JSON")
+                    raise ValueError("Could not parse gap plan as JSON") from None
                 tasks_data = json.loads(response_text[start:end])
         except Exception as e:
             logger.warning(f"Gap planning via LLM failed ({str(e)}), using gap names as queries")
@@ -184,9 +184,9 @@ Searches already performed (do not repeat):
 
     def _limit_tasks_by_depth(
         self,
-        tasks: List[ResearchTask],
+        tasks: list[ResearchTask],
         enhanced_prompt: EnhancedPrompt,
-    ) -> List[ResearchTask]:
+    ) -> list[ResearchTask]:
         """Keep task counts aligned with the selected research depth."""
         max_per_topic = {
             "quick": 1,
@@ -209,7 +209,7 @@ Searches already performed (do not repeat):
 
         return limited
 
-    def _create_default_tasks(self, enhanced_prompt: EnhancedPrompt) -> List[ResearchTask]:
+    def _create_default_tasks(self, enhanced_prompt: EnhancedPrompt) -> list[ResearchTask]:
         """Create default tasks if planning fails."""
         tasks = []
         task_id = 1
