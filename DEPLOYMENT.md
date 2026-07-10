@@ -48,6 +48,16 @@ curl -X POST https://<backend>/api/research \
 
 Then open the Vercel app, run a research from the dashboard, and watch the live workflow graph. Seed 2–3 example runs so the history page has content for visitors.
 
+## Monitoring (local)
+
+```bash
+docker compose --profile monitoring up --build
+# Grafana: http://localhost:3001 (dashboard "Research Agent", anonymous view)
+# Prometheus: http://localhost:9090
+```
+
+The monitoring profile is local tooling — cloud deploys just expose `/metrics`, which any hosted Prometheus (e.g. Grafana Cloud free tier) can scrape.
+
 ## Notes
 
 - The Pipelock proxy is local-dev tooling; leave `PIPELOCK_PROXY_URL` unset in deployment.

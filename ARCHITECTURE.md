@@ -46,6 +46,8 @@ Every LLM-dependent step has a non-LLM fallback so a rate limit degrades quality
 
 **Trace correlation:** the frontend generates the run id, sends it as `X-Trace-Id`, and the backend uses it as run id *and* checkpointer thread id. The Next.js events route (`frontend/app/api/research/[id]/events/route.ts`) is a thin proxy that rebuilds a span tree from the streamed node events, so the workflow graph in the UI mirrors actual backend execution — including replan cycles.
 
+**Metrics:** the same tracker choke point records Prometheus metrics (`app/utils/metrics.py`), exposed on `/metrics`: run outcomes, per-node duration histograms, replan counter, token/cost counters (from real Groq `usage`), active runs, SSE subscribers. `docker compose --profile monitoring up` starts Prometheus + a provisioned Grafana dashboard (`monitoring/`). Together: **traces** for one run, **metrics** for aggregate health, **evals** for quality over time.
+
 ## API surface
 
 | Endpoint | Purpose |

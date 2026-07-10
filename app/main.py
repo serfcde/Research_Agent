@@ -102,6 +102,11 @@ def create_app() -> FastAPI:
         router, prefix="/api", tags=["research"], dependencies=[Depends(require_api_key)]
     )
 
+    # Prometheus metrics (scraped by the monitoring compose profile)
+    from prometheus_client import make_asgi_app
+
+    app.mount("/metrics", make_asgi_app())
+
     # Health check endpoint (public; used by Docker/deploy healthchecks)
     @app.get("/health", tags=["system"])
     async def health_check():

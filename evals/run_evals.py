@@ -101,15 +101,23 @@ async def evaluate_item(item: dict) -> dict:
     grounding = await judge_grounding(report)
     coverage = await judge_coverage(item["prompt"], report)
     structure = check_structure(report, item.get("expected_topics", 1))
+    ops = ops_metrics(run_id)
+
+    # A run with zero successful LLM calls was produced entirely by the
+    # heuristic fallbacks (e.g. provider quota exhausted mid-suite). Its
+    # scores describe the fallback path, not the system — flag it so it
+    # can't silently poison aggregates or the baseline.
+    degraded = (ops.get("tokens") or {}).get("total_tokens", 0) == 0
 
     return {
         "id": item["id"],
         "prompt": item["prompt"],
         "run_id": run_id,
+        "degraded": degraded,
         "grounding": grounding,
         "coverage": coverage,
         "structure": structure,
-        "ops": ops_metrics(run_id),
+        "ops": ops,
         "wall_seconds": round(time.time() - started, 1),
         "report_words": report.total_words,
         "citations": len(report.citations),
@@ -128,17 +136,21 @@ def aggregate(results: list[dict]) -> dict:
         idx = min(len(values) - 1, round(p / 100 * (len(values) - 1)))
         return round(values[idx], 1)
 
-    latencies = [r["ops"]["total_seconds"] for r in results]
+    # Quality means only over healthy runs; degraded ones (zero successful
+    # LLM calls — see evaluate_item) are reported but never averaged in.
+    healthy = [r for r in results if not r.get("degraded")]
+    latencies = [r["ops"]["total_seconds"] for r in healthy]
     return {
         "runs": len(results),
-        "grounding_mean": mean([r["grounding"]["score"] for r in results]),
-        "coverage_mean": mean([r["coverage"]["score"] for r in results]),
-        "structure_mean": mean([r["structure"]["score"] for r in results]),
+        "degraded_runs": len(results) - len(healthy),
+        "grounding_mean": mean([r["grounding"]["score"] for r in healthy]),
+        "coverage_mean": mean([r["coverage"]["score"] for r in healthy]),
+        "structure_mean": mean([r["structure"]["score"] for r in healthy]),
         "latency_p50_s": pct(latencies, 50),
         "latency_p95_s": pct(latencies, 95),
-        "cost_mean_usd": mean([r["ops"]["cost_usd"] for r in results]),
-        "replan_rate": mean([1.0 if r["ops"]["iterations"] > 1 else 0.0 for r in results]),
-        "fallback_rate_mean": mean([r["ops"]["fallback_rate"] for r in results]),
+        "cost_mean_usd": mean([r["ops"]["cost_usd"] for r in healthy]),
+        "replan_rate": mean([1.0 if r["ops"]["iterations"] > 1 else 0.0 for r in healthy]),
+        "fallback_rate_mean": mean([r["ops"]["fallback_rate"] for r in healthy]),
     }
 
 
@@ -199,6 +211,7 @@ async def main() -> int:
             print(f"  FAILED: {exc}", file=sys.stderr)
             results.append({
                 "id": item["id"], "prompt": item["prompt"], "error": str(exc),
+                "degraded": True,
                 "grounding": {"score": 0.0}, "coverage": {"score": 0.0},
                 "structure": {"score": 0.0},
                 "ops": {"total_seconds": None, "cost_usd": 0.0, "iterations": 0, "fallback_rate": None},
@@ -206,6 +219,14 @@ async def main() -> int:
 
     summary = aggregate(results)
     print_summary(results, summary)
+
+    if summary["degraded_runs"]:
+        print(
+            f"\nWARNING: {summary['degraded_runs']}/{summary['runs']} runs were degraded "
+            "(zero successful LLM calls — provider quota/rate limit?). "
+            "Their scores are excluded from the aggregate.",
+            file=sys.stderr,
+        )
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -215,6 +236,13 @@ async def main() -> int:
     print(f"\nResults written to {out_path}")
 
     if args.save_baseline:
+        if summary["degraded_runs"] > 0:
+            print(
+                "Refusing to save a baseline containing degraded runs — "
+                "re-run when the provider quota allows a clean pass.",
+                file=sys.stderr,
+            )
+            return 2
         BASELINE_PATH.write_text(json.dumps(payload, indent=2))
         print(f"Baseline saved to {BASELINE_PATH}")
 

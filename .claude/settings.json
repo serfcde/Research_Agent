@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "deny": [
+      "you do not have the permission to commit the changes you just make the changes and i will commit it. no push or commit should be done through your side"
+    ]
+  }
+}
