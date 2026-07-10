@@ -1,0 +1,131 @@
+{
+  "timestamp": "20260710T023306Z",
+  "summary": {
+    "runs": 2,
+    "grounding_mean": 0.781,
+    "coverage_mean": 0.65,
+    "structure_mean": 1.0,
+    "latency_p50_s": 11.9,
+    "latency_p95_s": 14.9,
+    "cost_mean_usd": 0.004,
+    "replan_rate": 1.0,
+    "fallback_rate_mean": 0.0
+  },
+  "results": [
+    {
+      "id": "single-quick-solar",
+      "prompt": "Quick overview of perovskite solar cell technology",
+      "run_id": "eval-single-quick-solar-1783650739",
+      "grounding": {
+        "score": 0.875,
+        "supported": 6,
+        "partial": 2,
+        "unsupported": 0,
+        "claims_judged": 8
+      },
+      "coverage": {
+        "score": 0.5,
+        "missing": [
+          "device structure",
+          "manufacturing process",
+          "current challenges",
+          "future prospects",
+          "comparison to traditional solar cells"
+        ]
+      },
+      "structure": {
+        "score": 1.0,
+        "checks": {
+          "has_introduction": true,
+          "has_conclusion": true,
+          "has_all_topic_sections": true,
+          "sections_have_content": true,
+          "has_citations": true,
+          "word_count_sane": true,
+          "comparative_analysis_when_multi_topic": true
+        }
+      },
+      "ops": {
+        "total_seconds": 11.87,
+        "node_ms": {
+          "prompt_enhancer": 385.8,
+          "planner": 1051.0,
+          "worker": 8391.6,
+          "critic": 655.9,
+          "formatter": 1361.6
+        },
+        "iterations": 2,
+        "tasks_total": 4,
+        "tasks_completed": 4,
+        "fallback_rate": 0.0,
+        "tokens": {
+          "prompt_tokens": 3047,
+          "completion_tokens": 2091,
+          "total_tokens": 5138,
+          "llm_calls": 11
+        },
+        "cost_usd": 0.00345
+      },
+      "wall_seconds": 12.7,
+      "report_words": 1210,
+      "citations": 20
+    },
+    {
+      "id": "single-medium-crispr",
+      "prompt": "Research CRISPR gene editing applications in agriculture",
+      "run_id": "eval-single-medium-crispr-1783650751",
+      "grounding": {
+        "score": 0.688,
+        "supported": 5,
+        "partial": 1,
+        "unsupported": 2,
+        "claims_judged": 8
+      },
+      "coverage": {
+        "score": 0.8,
+        "missing": [
+          "specific crop examples",
+          "regulatory frameworks",
+          "environmental impact",
+          "economic analysis"
+        ]
+      },
+      "structure": {
+        "score": 1.0,
+        "checks": {
+          "has_introduction": true,
+          "has_conclusion": true,
+          "has_all_topic_sections": true,
+          "sections_have_content": true,
+          "has_citations": true,
+          "word_count_sane": true,
+          "comparative_analysis_when_multi_topic": true
+        }
+      },
+      "ops": {
+        "total_seconds": 14.92,
+        "node_ms": {
+          "prompt_enhancer": 266.6,
+          "planner": 2635.9,
+          "worker": 9946.7,
+          "critic": 744.3,
+          "formatter": 1310.2
+        },
+        "iterations": 2,
+        "tasks_total": 6,
+        "tasks_completed": 6,
+        "fallback_rate": 0.0,
+        "tokens": {
+          "prompt_tokens": 4197,
+          "completion_tokens": 3242,
+          "total_tokens": 7439,
+          "llm_calls": 13
+        },
+        "cost_usd": 0.00504
+      },
+      "wall_seconds": 34.8,
+      "report_words": 1665,
+      "citations": 26
+    }
+  ]
+}

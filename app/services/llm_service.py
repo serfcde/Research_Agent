@@ -80,7 +80,7 @@ class LLMService:
         temperature: float = 0.7,
     ) -> str:
         try:
-            logger.info(f"Calling LLM [{self.model}] via Pipelock proxy")
+            logger.info(f"Calling LLM [{self.model}]")
 
             kwargs = {
                 "model": self.model,
