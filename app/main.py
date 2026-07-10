@@ -2,11 +2,16 @@
 
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from app.config.settings import settings
 from app.utils.logger import get_logger
-from app.api.routes import router
+from app.api.deps import require_api_key
+from app.api.routes import limiter, router
 
 logger = get_logger(__name__)
 
@@ -69,28 +74,53 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Add CORS middleware
+    # Rate limiting (slowapi) — limits are declared on individual routes.
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    # CORS restricted to configured origins
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # Include routers
-    app.include_router(router, prefix="/api", tags=["research"])
+    # Structured JSON for unhandled errors (no stack traces to clients)
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        logger.exception(f"Unhandled error on {request.method} {request.url.path}: {exc}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "internal_error", "detail": "An unexpected error occurred."},
+        )
 
-    # Health check endpoint
+    # Include routers (API-key protected; /api/status stays public)
+    app.include_router(
+        router, prefix="/api", tags=["research"], dependencies=[Depends(require_api_key)]
+    )
+
+    # Health check endpoint (public; used by Docker/deploy healthchecks)
     @app.get("/health", tags=["system"])
     async def health_check():
-        """Health check endpoint."""
-        return {
+        """Health check: process is up and, when configured, the DB answers."""
+        from app.services.run_store import PostgresRunStore, get_run_store
+
+        health = {
             "status": "healthy",
             "app": settings.app_name,
             "version": settings.app_version,
             "timestamp": time.time(),
         }
+        store = get_run_store()
+        if isinstance(store, PostgresRunStore):
+            db_ok = await store.ping()
+            health["database"] = "ok" if db_ok else "unreachable"
+            if not db_ok:
+                health["status"] = "degraded"
+                return JSONResponse(status_code=503, content=health)
+        return health
 
     # Root endpoint
     @app.get("/", tags=["system"])

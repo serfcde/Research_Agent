@@ -6,6 +6,8 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.models.schemas import (
     PromptEnhancementRequest,
@@ -27,6 +29,9 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+# Shared limiter — registered on the app in main.create_app().
+limiter = Limiter(key_func=get_remote_address)
 
 # Keep references to in-flight background tasks so they aren't GC'd.
 _background_tasks: set = set()
@@ -58,7 +63,8 @@ async def status():
 # --------------------------------------------------------------------------- #
 
 @router.post("/research", status_code=202)
-async def start_research(request: FullResearchRequest, http_request: Request):
+@limiter.limit("5/minute")
+async def start_research(body: FullResearchRequest, request: Request):
     """
     Start the end-to-end research pipeline as a background job.
 
@@ -67,17 +73,17 @@ async def start_research(request: FullResearchRequest, http_request: Request):
     (SSE stream of node transitions). The X-Trace-Id header, when present,
     becomes the run_id so frontend spans correlate with backend events.
     """
-    run_id = http_request.headers.get("x-trace-id") or f"run_{uuid.uuid4().hex[:12]}"
-    logger.info(f"Starting research run {run_id}: {request.prompt[:60]}...")
+    run_id = request.headers.get("x-trace-id") or f"run_{uuid.uuid4().hex[:12]}"
+    logger.info(f"Starting research run {run_id}: {body.prompt[:60]}...")
 
     store = get_run_store()
     existing = await store.get_run(run_id)
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"Run {run_id} already exists")
-    await store.create_run(run_id, request.prompt)
+    await store.create_run(run_id, body.prompt)
 
     orchestrator = get_orchestrator()
-    task = asyncio.create_task(orchestrator.run_research_background(run_id, request.prompt))
+    task = asyncio.create_task(orchestrator.run_research_background(run_id, body.prompt))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 

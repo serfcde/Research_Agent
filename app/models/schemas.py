@@ -1,6 +1,6 @@
 """Pydantic models for data validation and serialization."""
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
@@ -149,10 +149,22 @@ class ResearchReport(BaseModel):
 # ============================================================================
 
 
+MAX_PROMPT_LENGTH = 2000
+
+
+def _validate_prompt(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("prompt must not be empty")
+    return stripped
+
+
 class PromptEnhancementRequest(BaseModel):
     """Request to enhance user prompt."""
 
-    prompt: str = Field(..., description="User prompt to enhance")
+    prompt: str = Field(..., min_length=1, max_length=MAX_PROMPT_LENGTH, description="User prompt to enhance")
+
+    _strip_prompt = field_validator("prompt")(_validate_prompt)
 
 
 class PlanningRequest(BaseModel):
@@ -177,7 +189,9 @@ class FormattingRequest(BaseModel):
 class FullResearchRequest(BaseModel):
     """Full end-to-end research request."""
 
-    prompt: str = Field(..., description="User research prompt")
+    prompt: str = Field(..., min_length=1, max_length=MAX_PROMPT_LENGTH, description="User research prompt")
+
+    _strip_prompt = field_validator("prompt")(_validate_prompt)
 
     model_config = ConfigDict(
         json_schema_extra={"example": {"prompt": "Research AI in healthcare and blockchain in banking"}}

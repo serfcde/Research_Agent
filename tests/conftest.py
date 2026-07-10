@@ -46,9 +46,19 @@ def app():
 
 
 @pytest.fixture
-def client(app):
-    """Create test client."""
-    return TestClient(app)
+def client(app, monkeypatch):
+    """
+    Test client with a running lifespan (persistent event loop), so
+    background research tasks actually execute during the test. Dummy
+    keys satisfy the startup fail-fast; no live call can happen anyway
+    thanks to the autouse no_live_apis fixture.
+    """
+    from app.config.settings import settings
+
+    monkeypatch.setattr(settings, "groq_api_key", settings.groq_api_key or "test-key")
+    monkeypatch.setattr(settings, "tavily_api_key", settings.tavily_api_key or "test-key")
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 @pytest.fixture
