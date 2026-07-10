@@ -1,9 +1,9 @@
 """Planner Agent - Create research execution plans."""
 
 import json
-from typing import List
-from app.services.llm_service import get_llm_service
+
 from app.models.schemas import EnhancedPrompt, ResearchTask
+from app.services.llm_service import get_llm_service
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -17,16 +17,28 @@ class PlannerAgent:
         self.llm = get_llm_service()
         self.task_id_counter = 0
 
-    async def create_plan(self, enhanced_prompt: EnhancedPrompt) -> List[ResearchTask]:
+    async def create_plan(
+        self,
+        enhanced_prompt: EnhancedPrompt,
+        gaps: list[str] | None = None,
+        existing_tasks: list[ResearchTask] | None = None,
+    ) -> list[ResearchTask]:
         """
         Create research plan from enhanced prompt.
 
         Args:
             enhanced_prompt: Enhanced prompt with structured requirements
+            gaps: When replanning, the specific under-covered subtopics to
+                target. Only incremental gap-filling tasks are returned.
+            existing_tasks: Tasks from earlier iterations, used to avoid
+                duplicates and to continue task numbering.
 
         Returns:
-            List of research tasks
+            List of research tasks (only the new ones when gaps are given)
         """
+        if gaps:
+            return await self._create_gap_plan(enhanced_prompt, gaps, existing_tasks or [])
+
         logger.info(f"Creating plan for {len(enhanced_prompt.topics)} topics")
 
         system_prompt = """You are an expert research planner. Your job is to break down research requirements into specific, actionable tasks.
@@ -100,11 +112,81 @@ Generate specific research tasks with search queries. For each topic, create tas
             # Return default tasks
             return self._create_default_tasks(enhanced_prompt)
 
+    async def _create_gap_plan(
+        self,
+        enhanced_prompt: EnhancedPrompt,
+        gaps: list[str],
+        existing_tasks: list[ResearchTask],
+    ) -> list[ResearchTask]:
+        """Create incremental tasks that target specific coverage gaps."""
+        logger.info(f"Replanning for {len(gaps)} coverage gaps")
+
+        next_task_id = max((t.task_id for t in existing_tasks), default=0) + 1
+        existing_queries = {t.search_query.strip().lower() for t in existing_tasks}
+
+        system_prompt = """You are an expert research planner. Earlier research left specific coverage gaps. Create ONE research task per gap.
+
+Return a JSON array of tasks with fields: topic, subtopic, search_query, description.
+- topic must be one of the original research topics the gap belongs to
+- search_query must be a specific web search likely to close the gap
+- Do NOT repeat research that was already done."""
+
+        user_message = f"""Original topics: {", ".join(enhanced_prompt.topics)}
+
+Coverage gaps to close:
+{chr(10).join(f"- {gap}" for gap in gaps)}
+
+Searches already performed (do not repeat):
+{chr(10).join(f"- {t.search_query}" for t in existing_tasks)}"""
+
+        try:
+            response_text = await self.llm.call_llm(
+                system_prompt=system_prompt,
+                user_prompt=user_message,
+                temperature=0.3,
+            )
+            try:
+                tasks_data = json.loads(response_text)
+            except json.JSONDecodeError:
+                start = response_text.find("[")
+                end = response_text.rfind("]") + 1
+                if start == -1 or end <= start:
+                    raise ValueError("Could not parse gap plan as JSON") from None
+                tasks_data = json.loads(response_text[start:end])
+        except Exception as e:
+            logger.warning(f"Gap planning via LLM failed ({str(e)}), using gap names as queries")
+            tasks_data = [
+                {
+                    "subtopic": f"gap_{idx}",
+                    "search_query": f"{gap} 2026",
+                    "description": f"Close coverage gap: {gap}",
+                }
+                for idx, gap in enumerate(gaps, 1)
+            ]
+
+        tasks = []
+        for task_data in tasks_data[: len(gaps)]:
+            query = str(task_data.get("search_query", "")).strip()
+            if not query or query.lower() in existing_queries:
+                continue
+            tasks.append(
+                ResearchTask(
+                    task_id=next_task_id + len(tasks),
+                    topic=task_data.get("topic", enhanced_prompt.topics[0]),
+                    subtopic=task_data.get("subtopic", "gap_research"),
+                    search_query=query,
+                    description=task_data.get("description", "Gap-filling research task"),
+                )
+            )
+
+        logger.info(f"Created {len(tasks)} gap-filling tasks")
+        return tasks
+
     def _limit_tasks_by_depth(
         self,
-        tasks: List[ResearchTask],
+        tasks: list[ResearchTask],
         enhanced_prompt: EnhancedPrompt,
-    ) -> List[ResearchTask]:
+    ) -> list[ResearchTask]:
         """Keep task counts aligned with the selected research depth."""
         max_per_topic = {
             "quick": 1,
@@ -127,7 +209,7 @@ Generate specific research tasks with search queries. For each topic, create tas
 
         return limited
 
-    def _create_default_tasks(self, enhanced_prompt: EnhancedPrompt) -> List[ResearchTask]:
+    def _create_default_tasks(self, enhanced_prompt: EnhancedPrompt) -> list[ResearchTask]:
         """Create default tasks if planning fails."""
         tasks = []
         task_id = 1

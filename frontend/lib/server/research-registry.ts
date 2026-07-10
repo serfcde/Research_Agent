@@ -124,14 +124,37 @@ export function setAgentStage(agents: AgentNode[], activeIndex: number, activePr
   });
 }
 
-export async function postBackend<T>(path: string, body: unknown): Promise<T> {
-  const backendUrl = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || "http://127.0.0.1:8000";
-  const response = await fetch(`${backendUrl}${path}`, {  // ✅ use backendUrl and path
+export function getBackendUrl() {
+  return process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || "http://127.0.0.1:8000";
+}
+
+export function backendHeaders(extra: Record<string, string> = {}) {
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...extra };
+  // Server-side only: never exposed to the browser.
+  if (process.env.BACKEND_API_KEY) headers["X-API-Key"] = process.env.BACKEND_API_KEY;
+  return headers;
+}
+
+export async function postBackend<T>(path: string, body: unknown, extraHeaders: Record<string, string> = {}): Promise<T> {
+  const response = await fetch(`${getBackendUrl()}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: backendHeaders(extraHeaders),
     body: JSON.stringify(body),
     cache: "no-store"
   });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`${path} failed with ${response.status}: ${text}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function getBackend<T>(path: string): Promise<T | undefined> {
+  const response = await fetch(`${getBackendUrl()}${path}`, {
+    headers: backendHeaders(),
+    cache: "no-store"
+  });
+  if (response.status === 404) return undefined;
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`${path} failed with ${response.status}: ${text}`);

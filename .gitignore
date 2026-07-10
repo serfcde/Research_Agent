@@ -1,4 +1,6 @@
+# Python
 venv/
+.venv/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -41,18 +43,20 @@ logs/
 .pytest_cache/
 htmlcov/
 
-# Output
+# Generated output
 research_outputs/
-*.txt
-*.md
-*.json
-!frontend/**/*.json
-!frontend/**/*.md
-!README.md  
+evals/results/
+data/
+
+# Local tooling artifacts
+assessment-*/
+pipelock-audit/
+pipelock.yaml
 
 # Docker
 docker-compose.override.yml
 
-
+# Node / Next.js
+node_modules/
 frontend/.next/
-frontend/node_modules/
+*.tsbuildinfo

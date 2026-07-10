@@ -1,6 +1,5 @@
 """Tests for API endpoints."""
 
-import pytest
 from fastapi.testclient import TestClient
 
 
@@ -64,7 +63,7 @@ class TestPlanningEndpoint:
         data = response.json()
         assert "tasks" in data
         assert len(data["tasks"]) > 0
-        
+
         # Verify task structure
         task = data["tasks"][0]
         assert "task_id" in task
@@ -81,10 +80,10 @@ class TestExecutionEndpoint:
         response = client.post(
             "/api/execute-research",
             json={"tasks": [sample_research_task]},
-            timeout=120,
         )
-        # Should get 200 or timeout, depending on network
-        assert response.status_code in [200, 504, 408]
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["results"]) == 1
 
 
 class TestFormattingEndpoint:
@@ -101,7 +100,7 @@ class TestFormattingEndpoint:
             "sources": [],
             "execution_time_seconds": 10.5,
         }
-        
+
         response = client.post(
             "/api/format-report",
             json={
@@ -109,7 +108,7 @@ class TestFormattingEndpoint:
                 "enhanced_prompt": sample_enhanced_prompt,
             },
         )
-        assert response.status_code in [200, 500]  # May fail due to LLM
+        assert response.status_code == 200
 
 
 class TestStatusEndpoint:

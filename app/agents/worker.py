@@ -2,10 +2,10 @@
 
 import asyncio
 import time
-from typing import List
+
+from app.models.schemas import ResearchSource, ResearchTask, TaskResult
 from app.services.llm_service import get_llm_service
 from app.tools.web_search import get_search_client
-from app.models.schemas import ResearchTask, TaskResult, ResearchSource
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -84,7 +84,7 @@ class WorkerAgent:
                 error_message=error_message,
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(f"Task {task.task_id} timed out after {self.task_timeout}s")
             return TaskResult(
                 task_id=task.task_id,
@@ -110,7 +110,7 @@ class WorkerAgent:
                 error_message=str(e),
             )
 
-    def _fallback_findings(self, content: str, sources: List[ResearchSource]) -> str:
+    def _fallback_findings(self, content: str, sources: list[ResearchSource]) -> str:
         """Create readable findings from search snippets when LLM summarization fails."""
         snippets = []
         for source in sources[:5]:
@@ -120,7 +120,7 @@ class WorkerAgent:
         fallback = " ".join(snippets) if snippets else content
         return fallback[:1200] if fallback else "Search returned sources, but no snippet content was available."
 
-    async def execute_tasks(self, tasks: List[ResearchTask]) -> List[TaskResult]:
+    async def execute_tasks(self, tasks: list[ResearchTask]) -> list[TaskResult]:
         """
         Execute multiple research tasks concurrently.
 

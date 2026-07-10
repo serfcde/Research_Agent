@@ -1,385 +1,173 @@
-# Research Agent - Production Agentic Research System
+# Research Agent
 
-A production-level multi-agent research pipeline built with FastAPI, OpenAI, and Tavily API. Orchestrates specialized agents (Prompt Clarifier → Planner → Worker → Formatter) to automatically research topics and generate professional reports.
+[![CI](https://github.com/serfcde/Research_Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/serfcde/Research_Agent/actions/workflows/ci.yml)
 
-## Features
+A fault-tolerant multi-agent research pipeline. Give it a research prompt; it plans web research, executes searches concurrently, **judges its own coverage and replans to fill gaps**, then writes a cited report — while streaming every agent transition live to a tracing UI.
 
-✨ **Multi-Agent Orchestration**
-- Prompt Clarifier: Parse & structure user queries
-- Planner: Decompose research into tasks
-- Worker: Execute concurrent web searches
-- Formatter: Generate professional reports
+**Stack:** FastAPI · LangGraph (cyclic graph + Postgres checkpointing) · Groq (`llama-3.3-70b-versatile`) · Tavily · Next.js 14 · Postgres
 
-🚀 **Production-Ready Architecture**
-- Async/concurrent task execution (5 parallel searches)
-- Structured Pydantic validation
-- Comprehensive error handling with retries
-- Detailed logging & observability
-- Fully containerized with Docker
-- Unit & integration tests
+## Why this isn't another agent wrapper
 
-📊 **Research Capabilities**
-- Multi-topic research with comparative analysis
-- Configurable research depth (quick/medium/deep)
-- 5 concurrent web searches per topic
-- LLM-powered summarization
-- Citation tracking
-- TXT file export
+- **Self-correcting research loop** — a critic agent scores coverage after every research pass and routes the graph back to the planner with concrete gaps (capped at 2 iterations). "Why LangGraph?" — because the graph genuinely cycles.
+- **Crash-safe runs** — graph state is checkpointed to Postgres per node transition (`thread_id = run_id`). `SIGKILL` the API mid-run, restart it, and the run **resumes from the exact node where it died** and finishes the report. Verified, not aspirational.
+- **End-to-end distributed tracing** — one id correlates the browser's span tree, the Next.js SSE proxy, backend tracker events (JSONL + live event bus), and (optionally) per-request ids from a Pipelock LLM-traffic proxy.
+- **CI-gated evaluation harness** — 15 fixed prompts scored by LLM judges (citation grounding, coverage) plus deterministic structure checks; `--compare` fails the build on a >10% quality regression. Cost and latency are measured from real token usage, not estimates.
 
-## ✅ Implementation Status
+## Architecture
 
-- ✅ Prompt Clarifier Agent - Complete
-- ✅ Planner Agent - Complete
-- ✅ Worker Agent - Complete
-- ✅ Tools Integration (Web Search, File Writer) - Complete
-- ✅ FastAPI Routes & Orchestration - Complete
-- ✅ Comprehensive Unit & Integration Tests (25 tests passing)
-- ✅ Docker Configuration - Complete
-- ⏳ PostgreSQL Database Integration - Optional Enhancement
+```mermaid
+flowchart LR
+  subgraph Frontend [Next.js]
+    UI[dashboard] --> S["/api/research/start"]
+    UI --> EV["/api/research/[id]/events<br/>(thin SSE proxy)"]
+  end
+  S -->|"POST /api/research → 202 {run_id}"| API[FastAPI]
+  EV -->|SSE| API
+  API --> PG[(Postgres<br/>runs + checkpoints)]
+  API -->|background task| G
+  subgraph G [LangGraph]
+    PE[prompt_enhancer] --> PL[planner] --> W[worker] --> C[critic]
+    C -->|"gaps, iteration < max"| PL
+    C -->|sufficient| F[formatter]
+  end
+  G --> T["tracker<br/>JSONL + event bus"] --> API
+```
 
-## Quick Start
+`POST /api/research` returns `202 {run_id}` immediately; the pipeline runs as a background job. Progress streams over `GET /api/research/{run_id}/events` (SSE with replay for late subscribers), and results persist in Postgres — the API answers for finished runs even after a restart.
+
+### Trace correlation
+
+```
+browser ──X-Trace-Id──▶ Next.js proxy ──X-Trace-Id──▶ FastAPI
+                                                        │ run_id = trace_id = thread_id
+                                                        ▼
+                            tracker events (node_start/node_end, JSONL + SSE)
+                                                        │
+                       spans rebuilt in the UI ◀────────┘
+```
+
+The run id doubles as the trace id and the LangGraph thread id, so UI spans, backend node events, and checkpoints all join on one key.
+
+## Quality & performance (eval baseline)
+
+Measured by `make eval` on the fixed dataset (see [EVALS.md](EVALS.md)); baseline currently from a 2-prompt seed run — regenerate with `make eval-baseline`:
+
+| Metric | Value |
+|---|---|
+| Citation grounding (LLM judge) | 0.78 |
+| Coverage (LLM judge) | 0.65 |
+| Structure checks | 1.00 |
+| Latency p50 | 11.9 s |
+| Cost per report (real token usage) | ~$0.004 |
+| Replan rate | 100% of baseline runs used the critic loop |
+
+`make eval-check` exits non-zero if grounding/coverage/structure regress >10% vs `evals/baseline.json`.
+
+## Quick start
 
 ### Prerequisites
 
-- Python 3.14+ (tested with 3.14.3)
-- OpenAI API key
-- Tavily API key (or SerpAPI fallback)
+- Python 3.12+, Node 20+
+- [Groq](https://console.groq.com) and [Tavily](https://tavily.com) API keys (both have free tiers)
+- Postgres (optional — enables durable runs + crash recovery; in-memory fallback otherwise)
 
-### Setup
-
-1. **Clone & Configure**
-   ```bash
-   git clone <repo>
-   cd Research_Agent
-   cp .env.example .env
-   # Edit .env with your API keys
-   ```
-
-2. **Create Virtual Environment**
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-
-3. **Run Application**
-   ```bash
-   python -m uvicorn app.main:app --reload
-   ```
-
-   Access API at: `http://localhost:8000`
-   - 📖 Interactive docs: http://localhost:8000/docs
-   - 🔍 OpenAPI schema: http://localhost:8000/openapi.json
-
-### Docker Setup
+### Backend
 
 ```bash
-# Build image
-docker build -f docker/Dockerfile -t research-agent .
-
-# Run with environment
-docker run -e OPENAI_API_KEY=sk-... -e TAVILY_API_KEY=... -p 8000:8000 research-agent
-
-# Or use docker-compose
-docker-compose -f docker/docker-compose.yml up
+cp .env.example .env        # fill in GROQ_API_KEY, TAVILY_API_KEY
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+make dev                    # http://localhost:8000/docs
 ```
 
-## API Endpoints
+### Frontend
 
-### 1. Enhance Prompt
 ```bash
-POST /api/enhance-prompt
-Content-Type: application/json
-
-{
-  "prompt": "Research quantum computing and edge AI"
-}
+cd frontend
+npm install
+npm run dev                 # http://localhost:3000
 ```
 
-**Response:**
-```json
-{
-  "topics": ["Quantum Computing", "Edge AI"],
-  "research_depth": "medium",
-  "required_sections": ["Overview", "Applications", "Challenges", "Future Trends"],
-  "compare_topics": true,
-  "focus_areas": []
-}
-```
+### Docker (app + Postgres)
 
-### 2. Plan Research
 ```bash
-POST /api/plan-research
-Content-Type: application/json
-
-{
-  "enhanced_prompt": {...}
-}
+docker compose up --build
 ```
 
-**Response:**
-```json
-{
-  "tasks": [
-    {
-      "task_id": 1,
-      "topic": "Quantum Computing",
-      "subtopic": "overview",
-      "search_query": "quantum computing overview 2026",
-      "description": "Get overview of quantum computing"
-    },
-    ...
-  ]
-}
-```
+### Try it
 
-### 3. Execute Research
 ```bash
-POST /api/execute-research
-Content-Type: application/json
+curl -X POST localhost:8000/api/research \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Compare solid state batteries vs lithium ion batteries"}'
+# → 202 {"run_id": "..."}
 
-{
-  "tasks": [...]
-}
+curl -N localhost:8000/api/research/<run_id>/events   # live node transitions
+curl localhost:8000/api/research/<run_id>             # status + report
 ```
 
-**Response:**
-```json
-{
-  "results": [
-    {
-      "task_id": 1,
-      "topic": "Quantum Computing",
-      "subtopic": "overview",
-      "status": "completed",
-      "findings": "...",
-      "sources": [...],
-      "execution_time_seconds": 5.2
-    },
-    ...
-  ]
-}
-```
+Or use the dashboard at `localhost:3000` and watch the workflow graph light up — including the critic sending the planner back for a gap-filling pass.
 
-### 4. Format Report
+### Crash recovery demo
+
 ```bash
-POST /api/format-report
-Content-Type: application/json
-
-{
-  "task_results": [...],
-  "enhanced_prompt": {...}
-}
+docker compose up -d
+curl -X POST localhost:8000/api/research -H "Content-Type: application/json" -d '{"prompt": "..."}'
+docker kill research-agent          # SIGKILL mid-run
+docker compose up -d                # restart
+# logs: "Resuming interrupted run ... resuming at node(s) ('worker',)"
 ```
 
-**Response:**
-```json
-{
-  "title": "Research Report: Quantum Computing and Edge AI",
-  "topics": ["Quantum Computing", "Edge AI"],
-  "introduction": "...",
-  "sections": {...},
-  "comparative_analysis": "...",
-  "conclusion": "...",
-  "citations": [...],
-  "generated_at": "2026-05-11T12:00:00",
-  "total_words": 3500
-}
-```
+## Tests, lint, evals
 
-### 5. Full Pipeline (End-to-End)
 ```bash
-POST /api/research
-Content-Type: application/json
-
-{
-  "prompt": "Research AI in healthcare and blockchain in banking"
-}
+make test        # 60 tests, hermetic (no API keys, no network)
+make lint        # ruff
+make eval        # full eval suite (needs API keys)
+make eval-check  # fail on >10% regression vs baseline
 ```
 
-**Response:**
-```json
-{
-  "report": {
-    "title": "Research Report: AI in Healthcare, Blockchain in Banking",
-    "topics": [...],
-    ...
-  },
-  "file_path": "/research_outputs/research_ai_blockchain_20260511_120000.txt",
-  "status": "completed",
-  "total_execution_time_seconds": 125.4
-}
-```
-
-## Project Structure
-
-```
-Research_Agent/
-├── app/
-│   ├── agents/
-│   │   ├── prompt_enhancer.py      # Clarify user prompts
-│   │   ├── planner.py              # Decompose into tasks
-│   │   ├── worker.py               # Execute tasks concurrently
-│   │   └── formatter.py            # Format reports
-│   ├── tools/
-│   │   ├── web_search.py           # Tavily + SerpAPI integration
-│   │   └── file_writer.py          # TXT file export
-│   ├── services/
-│   │   ├── llm_service.py          # OpenAI wrapper
-│   │   └── orchestration.py        # Main pipeline coordinator
-│   ├── models/
-│   │   └── schemas.py              # Pydantic validation models
-│   ├── api/
-│   │   └── routes.py               # FastAPI endpoints
-│   ├── config/
-│   │   └── settings.py             # Configuration management
-│   ├── utils/
-│   │   └── logger.py               # Structured logging
-│   └── main.py                     # FastAPI app entry point
-├── tests/
-│   ├── test_agents.py
-│   ├── test_integration.py
-│   └── fixtures.py
-├── docker/
-│   ├── Dockerfile
-│   └── docker-compose.yml
-├── research_outputs/               # Generated reports
-├── logs/                           # Application logs
-├── requirements.txt
-├── pytest.ini
-├── .env.example
-└── README.md
-```
+CI (GitHub Actions) runs ruff + the test suite (with a Postgres service container), frontend typecheck/lint/build, and a Docker image build on every push/PR.
 
 ## Configuration
 
-### Environment Variables
+All settings via environment variables (see `.env.example`):
 
-```bash
-# LLM
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
+| Variable | Purpose | Default |
+|---|---|---|
+| `GROQ_API_KEY` | LLM (required) | — |
+| `TAVILY_API_KEY` | Web search (required) | — |
+| `SERPAPI_API_KEY` | Search fallback (optional) | — |
+| `GROQ_MODEL` | Model id | `llama-3.3-70b-versatile` |
+| `DATABASE_URL` | Postgres for runs + checkpoints | empty = in-memory |
+| `API_KEYS` | Comma-separated `X-API-Key` values | empty = auth off |
+| `CORS_ORIGINS` | Allowed origins | `http://localhost:3000` |
+| `PIPELOCK_PROXY_URL` | Optional local LLM-traffic proxy | off |
 
-# Web Search
-TAVILY_API_KEY=...
-SERPAPI_API_KEY=...              # Fallback
+## Deployment
 
-# Research
-RESEARCH_OUTPUT_DIR=./research_outputs
-TAVILY_MAX_CONCURRENT_SEARCHES=5
-TAVILY_SEARCH_TIMEOUT_SECONDS=30
+Configs included for a free-tier deploy: `railway.json` (backend + Postgres on Railway) and a standard Next.js setup for Vercel. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
-# Application
-APP_DEBUG=true
-LOG_LEVEL=INFO
-HOST=0.0.0.0
-PORT=8000
+Frontend (Vercel) env vars: `BACKEND_API_URL`, `BACKEND_API_KEY` (server-side only — never exposed to the browser).
+
+## Project layout
+
+```
+app/
+  agents/         prompt_enhancer, planner (+gap mode), worker, critic, formatter
+  graph/          LangGraph graph, nodes, state, tracker (JSONL + SSE event bus)
+  services/       orchestration (background jobs, crash resume), run_store, llm_service
+  tools/          web_search (Tavily + SerpAPI fallback), file_writer
+  api/            routes (202 job API, SSE), auth dependency
+evals/            dataset, LLM judges, run_evals CLI, baseline
+frontend/         Next.js dashboard: live workflow graph, span tree, report viewer
+tests/            60 hermetic tests (agents mocked at the class boundary)
 ```
 
-## Performance
+## Resume bullets (maintainer's notes)
 
-Typical end-to-end performance for 2-topic research:
-- **Prompt clarification**: ~2-3 seconds
-- **Planning**: ~2-3 seconds
-- **Task execution (6 tasks, concurrent)**: ~30-45 seconds
-- **Formatting & file export**: ~5-10 seconds
-- **Total**: ~40-60 seconds
+> - Built a self-correcting multi-agent research pipeline (FastAPI + LangGraph) where a critic agent scores coverage and cycles the graph back to planning; replans occurred in **{replan_rate}** of eval runs and raised judged coverage measurably per pass.
+> - Engineered crash-safe execution: per-node Postgres checkpointing with automatic resume — a SIGKILLed run restarts at the exact failed node; **~${cost}/report at p50 {p50}s**, measured from real token usage.
+> - Shipped a CI-gated LLM evaluation harness (citation-grounding + coverage judges over a fixed 15-prompt dataset) that fails builds on >10% quality regression, plus end-to-end distributed tracing correlating browser spans, SSE node events, and LLM-proxy request ids on a single trace id.
 
-## Testing
-
-```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=app tests/
-
-# Run specific test file
-pytest tests/test_agents.py -v
-
-# Run with logging
-pytest -v -s
-```
-
-## Logging
-
-Logs are written to:
-- **Console**: Colored, structured output
-- **`logs/debug.log`**: All events (50 MB rotation)
-- **`logs/error.log`**: Only errors (10 MB rotation)
-
-Access logs:
-```bash
-tail -f logs/debug.log
-tail -f logs/error.log
-```
-
-## API Security Considerations
-
-- ✅ Rate limiting (5 concurrent searches)
-- ✅ Timeout protection (30s per task)
-- ✅ Input validation (Pydantic)
-- ✅ Error handling with graceful degradation
-- ⚠️ TODO: Add authentication for production
-- ⚠️ TODO: Add request rate limiting per IP
-
-## Known Limitations
-
-- LLM API costs scale with research depth
-- Tavily API has rate limits (fallback to SerpAPI)
-- No long-term memory between sessions
-- Single-threaded orchestration (can be improved with Celery)
-
-## Future Enhancements
-
-- [ ] PDF/HTML report generation
-- [ ] Vector database for result caching
-- [ ] Multi-user sessions with authentication
-- [ ] Web UI dashboard
-- [ ] Autonomous replanning on failures
-- [ ] Result deduplication
-- [ ] Citation validation
-- [ ] Streaming report generation
-
-## Troubleshooting
-
-### App fails to start
-```bash
-# Check logs
-tail logs/error.log
-
-# Verify env vars
-echo $OPENAI_API_KEY
-echo $TAVILY_API_KEY
-```
-
-### API returns 422 errors
-- Verify request format matches schema
-- Check `/docs` for field requirements
-
-### Slow research execution
-- Increase `TAVILY_MAX_CONCURRENT_SEARCHES`
-- Check network connectivity
-- Verify API key quotas
-
-## Contributing
-
-1. Create feature branch: `git checkout -b feature/your-feature`
-2. Make changes and test: `pytest`
-3. Commit: `git commit -m "Add feature"`
-4. Push: `git push origin feature/your-feature`
-5. Create pull request
-
-## License
-
-MIT License
-
-## Support
-
-- 📧 Email: support@researchagent.ai
-- 🐛 Issues: GitHub Issues
-- 💬 Discussions: GitHub Discussions
-
----
-
-**Built with ❤️ using FastAPI, LangChain, and OpenAI**
+Fill the placeholders from your latest `make eval` run.

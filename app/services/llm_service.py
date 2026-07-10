@@ -1,41 +1,70 @@
-"""LLM service with Groq support — routed through Pipelock firewall proxy."""
+"""LLM service backed by Groq, with optional Pipelock proxy routing."""
 
+import contextvars
 import json
+from typing import Any
+
 import httpx
-from typing import Any, Optional, Dict
 from groq import AsyncGroq
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
 )
+
 from app.config.settings import settings
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Pipelock forward proxy address (change port if you configured a different one)
-PIPELOCK_PROXY = "http://127.0.0.1:8888"
+# Per-run token accounting. The orchestrator seeds this contextvar at the
+# start of a pipeline; every LLM call inside that task tree (including
+# asyncio.gather children, which inherit the context) accumulates the real
+# usage numbers reported by the Groq API.
+_usage_ctx: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar(
+    "llm_usage", default=None
+)
+
+
+def start_usage_tracking() -> dict[str, int]:
+    """Seed token accounting for the current task tree and return the dict."""
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "llm_calls": 0}
+    _usage_ctx.set(usage)
+    return usage
+
+
+def _record_usage(response) -> None:
+    usage = _usage_ctx.get()
+    if usage is None or getattr(response, "usage", None) is None:
+        return
+    usage["prompt_tokens"] += response.usage.prompt_tokens or 0
+    usage["completion_tokens"] += response.usage.completion_tokens or 0
+    usage["total_tokens"] += response.usage.total_tokens or 0
+    usage["llm_calls"] += 1
 
 
 class LLMService:
-    """Service for interacting with Groq LLM via Pipelock firewall."""
+    """Service for interacting with the Groq LLM."""
 
     def __init__(self):
-        # ✅ Route all Groq API calls through Pipelock proxy for monitoring
-        http_client = httpx.AsyncClient(
-            proxy=PIPELOCK_PROXY,
-            verify=False,  # Pipelock terminates TLS locally; disable cert check for proxy
-        )
-        self.client = AsyncGroq(
-            api_key=settings.groq_api_key,
-            http_client=http_client,
-        )
-        self.model = "llama-3.3-70b-versatile"
+        client_kwargs: dict[str, Any] = {"api_key": settings.groq_api_key}
+
+        if settings.pipelock_proxy_url:
+            # Route Groq traffic through the Pipelock forward proxy for
+            # monitoring. Cert verification stays on unless explicitly
+            # disabled for a local TLS-terminating proxy.
+            client_kwargs["http_client"] = httpx.AsyncClient(
+                proxy=settings.pipelock_proxy_url,
+                verify=not settings.pipelock_proxy_insecure,
+            )
+            logger.info(f"LLM traffic routed via Pipelock proxy: {settings.pipelock_proxy_url}")
+
+        self.client = AsyncGroq(**client_kwargs)
+        self.model = settings.groq_model
         self.timeout = settings.llm_timeout_seconds
         self.max_tokens = settings.llm_max_tokens
-        logger.info("LLM service initialized with Pipelock proxy")
+        logger.info(f"LLM service initialized (model={self.model})")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -49,11 +78,11 @@ class LLMService:
         self,
         system_prompt: str,
         user_prompt: str,
-        response_format: Optional[Dict[str, Any]] = None,
+        response_format: dict[str, Any] | None = None,
         temperature: float = 0.7,
     ) -> str:
         try:
-            logger.info(f"Calling LLM [{self.model}] via Pipelock proxy")
+            logger.info(f"Calling LLM [{self.model}]")
 
             kwargs = {
                 "model": self.model,
@@ -69,6 +98,7 @@ class LLMService:
                 kwargs["response_format"] = response_format
 
             response = await self.client.chat.completions.create(**kwargs)
+            _record_usage(response)
             result = response.choices[0].message.content
             logger.info(f"LLM response received ({len(result)} chars)")
             return result
@@ -82,7 +112,7 @@ class LLMService:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.7,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         response_format = {"type": "json_object"}
         response_text = await self.call_llm(
             system_prompt=system_prompt,
@@ -107,11 +137,7 @@ class LLMService:
             temperature=0.5,
         )
 
-    async def count_tokens(self, text: str) -> int:
-        return len(text) // 4
-
-
-_llm_service: Optional[LLMService] = None
+_llm_service: LLMService | None = None
 
 
 def get_llm_service() -> LLMService:

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Bot, Clock3, FileText, History, Home, Menu, Moon, Search, Settings, Shield, Sun } from "lucide-react";
+import { Bot, Clock3, FileText, History, Home, Menu, Moon, Search, Settings, Shield, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/form";
@@ -81,16 +81,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Clock3 className="h-4 w-4 text-primary" />
                 Live API ready
               </div>
-              <div className="hidden items-center gap-2 rounded-md border border-border bg-background/50 px-3 py-2 text-xs text-muted-foreground xl:flex">
-                <BarChart3 className="h-4 w-4 text-accent" />
-                23k tokens/session
-              </div>
               <Button variant="outline" size="icon" onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")} aria-label="Toggle theme">
                 {resolvedTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </Button>
-              <Link href="/login" className="flex h-10 w-10 items-center justify-center rounded-md bg-muted text-xs font-semibold" aria-label="Open authentication">
+              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted text-xs font-semibold" aria-label="Profile">
                 {initials("Divya Research")}
-              </Link>
+              </div>
             </div>
           </div>
         </header>

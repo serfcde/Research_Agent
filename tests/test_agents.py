@@ -1,20 +1,14 @@
 """Unit tests for agents."""
 
-import pytest
 from unittest.mock import patch
-from app.agents.prompt_enhancer import PromptClarifierAgent
-from app.agents.planner import PlannerAgent
-from app.agents.worker import WorkerAgent
+
+import pytest
+
 from app.agents.formatter import FormatterAgent
+from app.agents.planner import PlannerAgent
+from app.agents.prompt_enhancer import PromptClarifierAgent
+from app.agents.worker import WorkerAgent
 from app.models.schemas import EnhancedPrompt
-from tests.fixtures import (
-    mock_enhanced_prompt,
-    mock_research_tasks,
-    mock_task_results,
-    mock_research_report,
-    mock_llm_service,
-    mock_search_client,
-)
 
 
 @pytest.mark.asyncio

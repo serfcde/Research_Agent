@@ -1,13 +1,8 @@
 """Integration tests for the research pipeline."""
 
 import pytest
+
 from app.services.orchestration import ResearchOrchestrator
-from app.models.schemas import FullResearchResponse
-from tests.fixtures import (
-    mock_llm_service,
-    mock_search_client,
-    mock_enhanced_prompt,
-)
 
 
 @pytest.mark.asyncio
@@ -24,10 +19,10 @@ async def test_full_pipeline_structure(
 ):
     """Test the overall pipeline structure."""
     # This is a structural test - verifies all pieces can be imported
-    from app.agents.prompt_enhancer import get_prompt_clarifier
-    from app.agents.planner import get_planner
-    from app.agents.worker import get_worker
     from app.agents.formatter import get_formatter
+    from app.agents.planner import get_planner
+    from app.agents.prompt_enhancer import get_prompt_clarifier
+    from app.agents.worker import get_worker
     from app.services.orchestration import get_orchestrator
 
     assert get_prompt_clarifier() is not None

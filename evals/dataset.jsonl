@@ -1,0 +1,15 @@
+{"id": "single-quick-solar", "prompt": "Quick overview of perovskite solar cell technology", "expected_topics": 1}
+{"id": "single-medium-crispr", "prompt": "Research CRISPR gene editing applications in agriculture", "expected_topics": 1}
+{"id": "single-deep-fusion", "prompt": "Deep research on commercial nuclear fusion progress", "expected_topics": 1}
+{"id": "compare-batteries", "prompt": "Compare solid state batteries vs lithium ion batteries", "expected_topics": 2}
+{"id": "compare-ai-chips", "prompt": "Compare edge AI chips and neuromorphic computing", "expected_topics": 2}
+{"id": "compare-cloud", "prompt": "Compare serverless computing vs container orchestration for startups", "expected_topics": 2}
+{"id": "multi-fintech", "prompt": "Research AI in fraud detection and blockchain in cross-border payments", "expected_topics": 2}
+{"id": "multi-health", "prompt": "Research telemedicine adoption and wearable health monitoring", "expected_topics": 2}
+{"id": "single-medium-quantum", "prompt": "Research quantum error correction milestones", "expected_topics": 1}
+{"id": "single-medium-space", "prompt": "Research reusable rocket economics and launch costs", "expected_topics": 1}
+{"id": "compare-energy", "prompt": "Compare green hydrogen vs grid-scale battery storage", "expected_topics": 2}
+{"id": "single-medium-robotics", "prompt": "Research humanoid robots in warehouse automation", "expected_topics": 1}
+{"id": "multi-climate", "prompt": "Research direct air capture technology and carbon credit markets", "expected_topics": 2}
+{"id": "single-quick-6g", "prompt": "Quick overview of 6G network research", "expected_topics": 1}
+{"id": "compare-dev-ai", "prompt": "Compare AI coding assistants and low-code platforms for enterprise development", "expected_topics": 2}

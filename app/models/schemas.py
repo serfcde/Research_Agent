@@ -1,9 +1,8 @@
 """Pydantic models for data validation and serialization."""
 
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any
 from datetime import datetime
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ============================================================================
 # Prompt Clarifier Agent
@@ -13,14 +12,14 @@ from datetime import datetime
 class EnhancedPrompt(BaseModel):
     """Enhanced user prompt with structured research requirements."""
 
-    topics: List[str] = Field(..., description="List of research topics extracted from user prompt")
+    topics: list[str] = Field(..., description="List of research topics extracted from user prompt")
     research_depth: str = Field(default="medium", description="Depth of research: quick, medium, or deep")
-    required_sections: List[str] = Field(
+    required_sections: list[str] = Field(
         default=["Overview", "Key Findings", "Challenges", "Future Trends"],
         description="Required sections in the research report",
     )
     compare_topics: bool = Field(default=False, description="Whether to include comparative analysis")
-    focus_areas: List[str] = Field(default=[], description="Specific areas to focus on")
+    focus_areas: list[str] = Field(default=[], description="Specific areas to focus on")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -83,9 +82,9 @@ class TaskResult(BaseModel):
     subtopic: str = Field(..., description="Specific subtopic")
     status: str = Field(default="completed", description="Execution status: completed, failed, partial")
     findings: str = Field(..., description="Summarized findings (200-300 words)")
-    sources: List[ResearchSource] = Field(default=[], description="List of sources used")
+    sources: list[ResearchSource] = Field(default=[], description="List of sources used")
     execution_time_seconds: float = Field(..., description="Time taken to execute this task")
-    error_message: Optional[str] = Field(default=None, description="Error message if task failed")
+    error_message: str | None = Field(default=None, description="Error message if task failed")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -118,12 +117,12 @@ class ResearchReport(BaseModel):
     """Structured research report."""
 
     title: str = Field(..., description="Report title")
-    topics: List[str] = Field(..., description="Research topics covered")
+    topics: list[str] = Field(..., description="Research topics covered")
     introduction: str = Field(..., description="Report introduction")
-    sections: Dict[str, str] = Field(..., description="Report sections by topic")
-    comparative_analysis: Optional[str] = Field(default=None, description="Comparative analysis if multi-topic")
+    sections: dict[str, str] = Field(..., description="Report sections by topic")
+    comparative_analysis: str | None = Field(default=None, description="Comparative analysis if multi-topic")
     conclusion: str = Field(..., description="Report conclusion")
-    citations: List[ResearchSource] = Field(default=[], description="All cited sources")
+    citations: list[ResearchSource] = Field(default=[], description="All cited sources")
     generated_at: datetime = Field(default_factory=datetime.utcnow, description="Report generation timestamp")
     total_words: int = Field(..., description="Total word count")
 
@@ -149,10 +148,22 @@ class ResearchReport(BaseModel):
 # ============================================================================
 
 
+MAX_PROMPT_LENGTH = 2000
+
+
+def _validate_prompt(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("prompt must not be empty")
+    return stripped
+
+
 class PromptEnhancementRequest(BaseModel):
     """Request to enhance user prompt."""
 
-    prompt: str = Field(..., description="User prompt to enhance")
+    prompt: str = Field(..., min_length=1, max_length=MAX_PROMPT_LENGTH, description="User prompt to enhance")
+
+    _strip_prompt = field_validator("prompt")(_validate_prompt)
 
 
 class PlanningRequest(BaseModel):
@@ -164,20 +175,22 @@ class PlanningRequest(BaseModel):
 class ExecutionRequest(BaseModel):
     """Request to execute research tasks."""
 
-    tasks: List[ResearchTask] = Field(..., description="Tasks to execute")
+    tasks: list[ResearchTask] = Field(..., description="Tasks to execute")
 
 
 class FormattingRequest(BaseModel):
     """Request to format research results."""
 
-    task_results: List[TaskResult] = Field(..., description="Results from executed tasks")
+    task_results: list[TaskResult] = Field(..., description="Results from executed tasks")
     enhanced_prompt: EnhancedPrompt = Field(..., description="Original enhanced prompt")
 
 
 class FullResearchRequest(BaseModel):
     """Full end-to-end research request."""
 
-    prompt: str = Field(..., description="User research prompt")
+    prompt: str = Field(..., min_length=1, max_length=MAX_PROMPT_LENGTH, description="User research prompt")
+
+    _strip_prompt = field_validator("prompt")(_validate_prompt)
 
     model_config = ConfigDict(
         json_schema_extra={"example": {"prompt": "Research AI in healthcare and blockchain in banking"}}

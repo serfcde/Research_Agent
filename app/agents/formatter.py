@@ -1,15 +1,12 @@
 """Formatter Agent - Create professional research reports."""
 
-import re
-from typing import List, Dict
-from datetime import datetime
-from app.services.llm_service import get_llm_service
 from app.models.schemas import (
-    TaskResult,
     EnhancedPrompt,
     ResearchReport,
     ResearchSource,
+    TaskResult,
 )
+from app.services.llm_service import get_llm_service
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,20 +19,28 @@ class FormatterAgent:
         """Initialize formatter agent."""
         self.llm = get_llm_service()
 
-    def _group_results_by_topic(self, results: List[TaskResult]) -> Dict[str, List[TaskResult]]:
-        """Group task results by topic, case-insensitive."""
-        grouped = {}
+    def _group_results_by_topic(self, results: list[TaskResult]) -> dict[str, list[TaskResult]]:
+        """Group task results by topic, case-insensitive, keeping original casing for display."""
+        grouped: dict[str, list[TaskResult]] = {}
+        canonical: dict[str, str] = {}
         for result in results:
-            # Normalize key to lowercase for grouping
-            key = result.topic.strip().lower()
-            if key not in grouped:
-                grouped[key] = []
-            grouped[key].append(result)
+            normalized = result.topic.strip().lower()
+            key = canonical.setdefault(normalized, result.topic.strip())
+            grouped.setdefault(key, []).append(result)
         return grouped
+
+    @staticmethod
+    def _results_for_topic(grouped: dict[str, list[TaskResult]], topic: str) -> list[TaskResult]:
+        """Case-insensitive lookup of a topic's results in a grouped dict."""
+        normalized = topic.strip().lower()
+        for key, results in grouped.items():
+            if key.lower() == normalized:
+                return results
+        return []
 
     async def _generate_introduction(
         self,
-        topics: List[str],
+        topics: list[str],
         enhanced_prompt: EnhancedPrompt,
     ) -> str:
         """Generate report introduction using LLM."""
@@ -61,7 +66,7 @@ Make it engaging, clear, and approximately 150 words."""
 
     async def _generate_conclusion(
         self,
-        topics: List[str],
+        topics: list[str],
         findings_summary: str,
     ) -> str:
         """Generate report conclusion using LLM."""
@@ -88,8 +93,8 @@ Make it comprehensive and approximately 150 words."""
 
     async def _generate_comparative_analysis(
         self,
-        topics: List[str],
-        grouped_results: Dict[str, List[TaskResult]],
+        topics: list[str],
+        grouped_results: dict[str, list[TaskResult]],
     ) -> str:
         """Generate comparative analysis between topics."""
         if len(topics) < 2:
@@ -99,9 +104,9 @@ Make it comprehensive and approximately 150 words."""
 
         topics_list = []
         for topic in topics:
-            findings = " ".join([r.findings for r in grouped_results.get(topic.strip().lower(), [])])
+            findings = " ".join([r.findings for r in self._results_for_topic(grouped_results, topic)])
             topics_list.append(f"{topic}: {findings[:500]}")
-            
+
         user_message = f"""Compare and contrast the following:
 
 {chr(10).join(topics_list)}
@@ -119,7 +124,7 @@ Write a 300-word comparative analysis highlighting similarities, differences, an
             logger.warning(f"Failed to generate comparative analysis: {str(e)}")
             return ""
 
-    def _format_section_text(self, topic: str, results: List[TaskResult]) -> str:
+    def _format_section_text(self, topic: str, results: list[TaskResult]) -> str:
         """Format findings for a topic into readable text."""
         text = f"\n### {topic}\n\n"
 
@@ -140,7 +145,7 @@ Write a 300-word comparative analysis highlighting similarities, differences, an
 
         return text
 
-    def _extract_all_sources(self, results: List[TaskResult]) -> List[ResearchSource]:
+    def _extract_all_sources(self, results: list[TaskResult]) -> list[ResearchSource]:
         """Extract and deduplicate all sources from results."""
         seen_urls = set()
         sources = []
@@ -155,7 +160,7 @@ Write a 300-word comparative analysis highlighting similarities, differences, an
 
     async def format_report(
         self,
-        task_results: List[TaskResult],
+        task_results: list[TaskResult],
         enhanced_prompt: EnhancedPrompt,
     ) -> ResearchReport:
         """
@@ -185,9 +190,7 @@ Write a 300-word comparative analysis highlighting similarities, differences, an
             logger.debug("Formatting sections...")
             sections = {}
             for topic in enhanced_prompt.topics:
-                # ✅ normalize lookup key
-                topic_key = topic.strip().lower()
-                topic_results = grouped.get(topic_key, [])
+                topic_results = self._results_for_topic(grouped, topic)
                 if topic_results:
                     sections[topic] = self._format_section_text(topic, topic_results)
                 else:
@@ -243,7 +246,7 @@ Write a 300-word comparative analysis highlighting similarities, differences, an
         text += "## Introduction\n\n"
         text += report.introduction + "\n\n"
 
-        for topic, section in report.sections.items():
+        for section in report.sections.values():
             text += section + "\n"
 
         if report.comparative_analysis:
@@ -271,7 +274,7 @@ Write a 300-word comparative analysis highlighting similarities, differences, an
         md += "## Introduction\n\n"
         md += report.introduction + "\n\n"
 
-        for topic, section in report.sections.items():
+        for section in report.sections.values():
             md += section + "\n"
 
         if report.comparative_analysis:
